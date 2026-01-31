@@ -10,6 +10,7 @@ module "firewall" {
   project_id = "my-project-id"
   name       = "allow-ssh"
   network    = "default"
+  target_tags = ["ssh-enabled"]
   
   allow = [
     {
@@ -44,3 +45,4 @@ module "firewall" {
 | <a name="output_firewall_rule"></a> [firewall\_rule](#output\_firewall\_rule) | The created firewall rule resource |
 | <a name="output_name"></a> [name](#output\_name) | The name of the firewall rule |
 | <a name="output_self_link"></a> [self\_link](#output\_self\_link) | The URI of the firewall rule |
+| <a name="output_target_tags"></a> [target\_tags](#output\_target\_tags) | The target tags applied by the firewall rule |

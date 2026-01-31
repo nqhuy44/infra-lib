@@ -111,3 +111,12 @@ variable "service_account" {
   })
   default = null
 }
+
+variable "ssh_keys" {
+  description = "List of SSH keys to inject into the instance metadata. Each object should contain 'user' and 'public_key'."
+  type = list(object({
+    user       = string
+    public_key = string
+  }))
+  default = []
+}

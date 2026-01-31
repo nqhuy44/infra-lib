@@ -57,7 +57,12 @@ resource "google_compute_instance" "default" {
     }
   }
 
-  metadata                = var.metadata
+  metadata = merge(
+    var.metadata,
+    length(var.ssh_keys) > 0 ? {
+      "ssh-keys" = join("\n", [for key in var.ssh_keys : "${key.user}:${key.public_key}"])
+    } : {}
+  )
   metadata_startup_script = var.metadata_startup_script
 
   dynamic "service_account" {

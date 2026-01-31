@@ -26,6 +26,17 @@ module "vm" {
   # Optional: Spot Instance
   spot_instance    = true
   
+  # Optional: Tags (e.g. from firewall)
+  tags = ["web-server", "ssh-access"]
+  
+  # Optional: SSH Keys
+  ssh_keys = [
+    {
+      user       = "myuser"
+      public_key = "ssh-rsa AAA..."
+    }
+  ]
+  
   # Optional: Additional Data Disks
   additional_disks = [
     {
@@ -53,6 +64,7 @@ module "vm" {
 | <a name="input_network"></a> [network](#input\_network) | Name or self\_link of the network to attach to. | `string` | n/a | yes |
 | <a name="input_subnetwork"></a> [subnetwork](#input\_subnetwork) | Name or self\_link of the subnetwork to attach to. | `string` | n/a | yes |
 | <a name="input_tags"></a> [tags](#input\_tags) | Network tags. | `list(string)` | `[]` | no |
+| <a name="input_ssh_keys"></a> [ssh\_keys](#input\_ssh\_keys) | List of SSH keys to inject into the instance metadata. | <pre>list(object({<br>    user       = string<br>    public_key = string<br>  }))</pre> | `[]` | no |
 | <a name="input_boot_disk_image"></a> [boot\_disk\_image](#input\_boot\_disk\_image) | Image to use for the boot disk. | `string` | `"debian-cloud/debian-11"` | no |
 | <a name="input_boot_disk_size"></a> [boot\_disk\_size](#input\_boot\_disk\_size) | Size of the boot disk in GB. | `number` | `10` | no |
 | <a name="input_boot_disk_type"></a> [boot\_disk\_type](#input\_boot\_disk\_type) | Type of the boot disk (e.g., pd-standard, pd-ssd, pd-balanced). | `string` | `"pd-standard"` | no |
