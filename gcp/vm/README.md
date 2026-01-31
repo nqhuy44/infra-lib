@@ -17,6 +17,10 @@ module "vm" {
   boot_disk_size  = 50
   boot_disk_type  = "pd-ssd"
   
+  # Lifecycle Controls
+  boot_disk_auto_delete = true
+  instance_status       = "RUNNING"
+  
   # Optional: Public IP
   assign_public_ip = true
   
@@ -68,9 +72,11 @@ module "vm" {
 | <a name="input_boot_disk_image"></a> [boot\_disk\_image](#input\_boot\_disk\_image) | Image to use for the boot disk. | `string` | `"debian-cloud/debian-11"` | no |
 | <a name="input_boot_disk_size"></a> [boot\_disk\_size](#input\_boot\_disk\_size) | Size of the boot disk in GB. | `number` | `10` | no |
 | <a name="input_boot_disk_type"></a> [boot\_disk\_type](#input\_boot\_disk\_type) | Type of the boot disk (e.g., pd-standard, pd-ssd, pd-balanced). | `string` | `"pd-standard"` | no |
+| <a name="input_boot_disk_auto_delete"></a> [boot\_disk\_auto\_delete](#input\_boot\_disk\_auto\_delete) | Whether the boot disk should be auto-deleted when the instance is deleted. | `bool` | `true` | no |
+| <a name="input_instance_status"></a> [instance\_status](#input\_instance\_status) | The desired status of the instance (RUNNING or TERMINATED). | `string` | `"RUNNING"` | no |
 | <a name="input_additional_disks"></a> [additional\_disks](#input\_additional\_disks) | List of additional data disks to create and attach to the instance. | <pre>list(object({<br>    name        = string<br>    size        = number<br>    type        = optional(string, "pd-standard")<br>    device_name = optional(string)<br>  }))</pre> | `[]` | no |
 | <a name="input_assign_public_ip"></a> [assign\_public\_ip](#input\_assign\_public\_ip) | If true, assigns a public IPv4 address to the instance. | `bool` | `false` | no |
-| <a name="input_static_public_ip"></a> [static\_public\_ip](#input\_static\_public\_ip) | The static external IP address to assign to the instance. Requires assign\_public\_ip to be true. | `string` | `null` | no |
+| <a name="input_static_public_ip"></a> [static\_public\_ip](#input\_static\_public\_ip) | The static external IP address to assign to the instance. Requires assign_public_ip to be true. | `string` | `null` | no |
 | <a name="input_enable_ipv6"></a> [enable\_ipv6](#input\_enable\_ipv6) | If true, enable IPv6 on the network interface. | `bool` | `false` | no |
 | <a name="input_spot_instance"></a> [spot\_instance](#input\_spot\_instance) | If true, provision as a Spot VM (preemptible). | `bool` | `false` | no |
 | <a name="input_metadata"></a> [metadata](#input\_metadata) | Metadata key/value pairs. | `map(string)` | `{}` | no |

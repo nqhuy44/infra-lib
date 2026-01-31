@@ -120,3 +120,15 @@ variable "ssh_keys" {
   }))
   default = []
 }
+
+variable "boot_disk_auto_delete" {
+  description = "Whether the boot disk should be auto-deleted when the instance is deleted."
+  type        = bool
+  default     = true
+}
+
+variable "instance_status" {
+  description = "The desired status of the instance (RUNNING or TERMINATED)."
+  type        = string
+  default     = "RUNNING"
+}
