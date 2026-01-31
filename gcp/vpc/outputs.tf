@@ -5,7 +5,12 @@ output "network" {
 
 output "subnets" {
   value       = google_compute_subnetwork.subnetwork
-  description = "The created subnets"
+  description = "The created subnets resources (keyed by region/name)"
+}
+
+output "subnets_by_name" {
+  value       = { for id, s in google_compute_subnetwork.subnetwork : s.name => s }
+  description = "The created subnets resources (keyed by name). Use this if subnet names are unique across regions."
 }
 
 output "network_name" {
