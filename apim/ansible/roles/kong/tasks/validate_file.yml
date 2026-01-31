@@ -1,0 +1,50 @@
+---
+- name: Build file list from enabled projects
+  set_fact:
+    kong_file_list: "{{ kong_file_list | default([]) + [ {'project': item.0.name, 'file': item.1} ] }}"
+  with_subelements:
+    - "{{ projects | selectattr('enabled','equalto',true) | list }}"
+    - kong_files
+
+- name: Endplay if kong file list is empty
+  meta: end_play
+  when: kong_file_list | length == 0
+
+- name: Validate every file in kong_file_list exist
+  stat:
+    path: "{{ kong_config_dir }}/{{ item.file }}"
+  register: kong_file_stat
+  loop: "{{ kong_file_list }}"
+
+- name: Endplay if any kong file not found
+  meta: end_play
+  when: "'False' in (kong_file_stat.results | map(attribute='stat.exists') | map('string') | list)"
+
+- name: Empty temp dir if exists (local)
+  file:
+    path: "{{ temp_dir }}"
+    state: absent
+
+- name: Ensure temp dir exists (local)
+  file:
+    path: "{{ temp_dir }}"
+    state: directory
+    mode: "0700"
+    recurse: yes
+
+- name: Copy kong files to temp dir
+  copy:
+    src: "{{ kong_config_dir }}/{{ item.file }}"
+    dest: "{{ temp_dir }}/{{ item.project }}.{{ item.file | basename }}"
+  loop: "{{ kong_file_list }}"
+  no_log: true
+
+- name: Get list of kong temp files
+  find:
+    paths: "{{ temp_dir }}"
+    patterns: ["*.yml", "*.yaml"]
+  register: kong_temp_files
+
+- name: Normalize list of temp files
+  set_fact:
+    kong_temp_files: "{{ kong_temp_files.files | map(attribute='path') | list }}"

@@ -1,0 +1,6 @@
+---
+- name: Cleanup temporary files
+  become: false
+  file:
+    path: "{{ temp_dir }}"
+    state: absent

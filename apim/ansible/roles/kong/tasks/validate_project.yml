@@ -1,0 +1,21 @@
+---
+- name: Get enabled projects
+  set_fact:
+    enabled_projects: "{{ projects | default([]) | selectattr('enabled', 'equalto', true) }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: End play if no enabled projects
+  meta: end_play
+  when: enabled_projects | length == 0
+
+- name: Validate enabled projects have required attributes
+  assert:
+    that:
+      - item.kong_files is defined and (item.kong_files | length) > 0
+    fail_msg: "Project '{{ item.name }}' is missing required attributes."
+    success_msg: "Project '{{ item.name }}' has all required attributes"
+  no_log: true
+  loop: "{{ enabled_projects }}"
+  delegate_to: localhost
+  run_once: true

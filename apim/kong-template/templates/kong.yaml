@@ -1,0 +1,175 @@
+_format_version: "3.0"
+
+
+{{- if .Values.upstreams }}
+upstreams:
+{{- range .Values.upstreams }}
+  - name: {{ .name }}
+    {{- if .targets }}
+    targets:
+    {{- range .targets }}
+      - target: {{ .target }}
+        weight: {{ .weight | default 100 }}
+    {{- end }}
+    {{- end }}
+    {{- if .algorithm }}
+    algorithm: {{ .algorithm }}
+    {{- end }}
+    {{- if .healthchecks }}
+    healthchecks: {{ .healthchecks | toYaml | nindent 6 }}
+    {{- end }}
+{{- end }}
+{{- end }}
+
+services:
+{{- range .Values.services }}
+  - name: {{ .name }}
+    {{- if .url }}
+    url: {{ .url }}
+    {{- end }}
+    {{- if .path }}
+    path: {{ .path }}
+    {{- end }}
+    {{- if .host }}
+    host: {{ .host }}
+    {{- end }}
+    {{- if .port }}
+    port: {{ .port }}
+    {{- end }}
+    {{- if .protocol }}
+    protocol: {{ .protocol }}
+    {{- end }}
+    {{- if .connect_timeout }}
+    connect_timeout: {{ .connect_timeout }}
+    {{- end }}
+    {{- if .write_timeout }}
+    write_timeout: {{ .write_timeout }}
+    {{- end }}
+    {{- if .read_timeout }}
+    read_timeout: {{ .read_timeout }}
+    {{- end }}
+    {{- if .tags }}
+    tags:
+    {{- range .tags }}
+      - {{ . }}
+    {{- end }}
+    {{- end }}
+    {{- if .plugins }}
+    plugins:
+    {{- range .plugins }}
+      - name: {{ .name }}
+        {{- if .config }}
+        config: {{ .config | toYaml | nindent 10 }}
+        {{- end }}
+    {{- end }}
+    {{- end }}
+{{- end }}
+
+routes:
+{{- range .Values.routes }}
+  - name: {{ .name }}
+    service:
+      name: {{ .service.name }}
+    {{- if .hosts }}
+    hosts:
+    {{- range .hosts }}
+      - {{ . }}
+    {{- end }}
+    {{- end }}
+    {{- if .methods }}
+    methods:
+    {{- range .methods }}
+      - {{ . }}
+    {{- end }}
+    {{- end }}
+    {{- if .paths }}
+    paths:
+    {{- range .paths }}
+      - {{ . }}
+    {{- end }}
+    {{- end }}
+    {{- if .plugins }}
+    plugins:
+    {{- range .plugins }}
+      - name: {{ .name }}
+        {{- if .config }}
+        config: {{ .config | toYaml | nindent 10 }}
+        {{- end }}
+    {{- end }}
+    {{- end }}
+    {{- if .strip_path }}
+    strip_path: {{ .strip_path }}
+    {{- else }}
+    strip_path: false
+    {{- end }}
+    {{- if .regex_priority }}
+    regex_priority: {{ .regex_priority }}
+    {{- end }}
+    {{- if .preserve_host }}
+    preserve_host: {{ .preserve_host }}
+    {{- end }}
+    {{- if .tags }}
+    tags:
+    {{- range .tags }}
+      - {{ . }}
+    {{- end }}
+    {{- end }}
+    {{- if .extra }}
+    extra:
+    {{- range .extra }}
+      - {{ . }}
+    {{- end }}
+    {{- end }}
+{{- end }}
+
+{{- if .Values.plugins }}
+plugins:
+{{- range .Values.plugins }}
+  {{- $plugin := . }}
+
+  {{/* attach to services by explicit names */}}
+  {{- if $plugin.attach.services }}
+    {{- range $svc := $plugin.attach.services }}
+  - name: {{ $plugin.name }}
+    service: {{ $svc }}
+    {{- if $plugin.config }}
+    config: {{ $plugin.config | toYaml | nindent 6 }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+
+  {{/* attach to services by tags */}}
+  {{- if $plugin.attach.serviceTags }}
+    {{- range $tag := $plugin.attach.serviceTags }}
+      {{- range $svc := $.Values.services }}
+        {{- if has $tag $svc.tags }}
+  - name: {{ $plugin.name }}
+    service: {{ $svc.name }}
+    {{- if $plugin.config }}
+    config: {{ $plugin.config | toYaml | nindent 6 }}
+    {{- end }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.consumers }}
+consumers:
+{{- range .Values.consumers }}
+  - username: {{ .username }}
+    {{- if .keyauth_credentials }}
+    keyauth_credentials:
+    {{- range .keyauth_credentials }}
+      - key: {{ .key }}
+    {{- end }}
+    {{- end }}
+    {{- if .acls }}
+    acls:
+    {{- range .acls }}
+      - group: {{ .group }}
+    {{- end }}
+    {{- end }}
+{{- end }}
+{{- end }}

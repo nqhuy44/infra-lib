@@ -1,0 +1,24 @@
+---
+- name: Run deck diff
+  include_tasks: deck_diff.yml
+
+- name: Run deck gateway sync
+  become: false
+  delegate_to: localhost
+  run_once: true
+  command: >
+    deck gateway sync --kong-addr "http://{{ kong_host }}:{{ kong_admin_port }}" "{{ kong_render_path }}"
+  register: deck_sync_results
+  ignore_errors: true
+  no_log: false
+
+- name: Show deck sync results
+  become: false
+  debug:
+    msg: "{{ deck_sync_results.stdout | default(deck_sync_results.stderr) }}"
+  when: deck_sync_results is defined and deck_sync_results.stdout | length > 0
+  run_once: true
+  delegate_to: localhost
+
+- name: Cleanup
+  include_tasks: cleanup.yml

@@ -1,0 +1,94 @@
+name: Nonprod - Kong Diff
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [develop]
+    paths:
+      - "kong-config/*/nonprod/**"
+      - "ansible/group_vars/nonprod/**"
+      - "ansible/group_vars/nonprod.yml"
+      - "ansible/group_vars/nonprod.yaml"
+      - "ansible/host_vars/*/nonprod/**"
+
+env:
+  AWS_REGION: ap-southeast-1
+  AWS_ACCOUNT_ID: "533267093295"
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  infra-scan:
+    uses: uneycom/jenkins-shared-library/.github/workflows/infra-scan.yml@v0.6.2
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    with:
+      runner_label: k8s
+      enable_gitleaks: true
+      enable_checkov: true
+      enable_tfsec: true
+      module_repo: "uneycom/devops-terraform-modules"
+      module_commit_id: "1426f93de266a27835a976a6691836ef958acac5"
+      trivy_self_host: false
+      trivy_skip_dir: ""
+      trivy_timeout: "5m"
+
+  kong-diff-nonprod:
+    runs-on: k8s
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          clean: true # Ensures repo folder is reset
+
+      # Set up AWS credentials
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/global-github-actions-role
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install kong deck
+        run: |
+          mkdir -p "$RUNNER_TEMP/deck"
+          curl -sSL https://github.com/kong/deck/releases/download/v1.52.0/deck_1.52.0_linux_amd64.tar.gz -o "$RUNNER_TEMP/deck/deck.tar.gz"
+          tar -zxf "$RUNNER_TEMP/deck/deck.tar.gz" -C "$RUNNER_TEMP/deck"
+          chmod +x "$RUNNER_TEMP/deck/deck"
+          echo "$RUNNER_TEMP/deck" >> $GITHUB_PATH
+
+      - name: Run kong_diff.yaml playbook (nonprod)
+        run: |
+          cd ansible
+          ansible-playbook playbook/nonprod/kong_diff.yaml
+
+      - name: Read deck diff output
+        id: deck_diff_output
+        run: |
+          echo "content<<EOF" >> $GITHUB_OUTPUT
+          head -c 65000 deck_diff_output.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Comment Deck Diff Report on PR
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: Kong Deck Diff Report
+          message: |
+            ```
+            Kong Deck Diff non-prod results:
+            ${{ steps.deck_diff_output.outputs.content }}
+            ```
+
+      - name: Cleanup deck
+        if: always() # ensures cleanup runs even if previous step fails
+        run: rm -rf "$RUNNER_TEMP/deck"

@@ -1,0 +1,10 @@
+- hosts: localhost
+  connection: local
+  become: false
+  tasks:
+    - name: Run kong sync tasks
+      include_role:
+        name: kong
+        tasks_from: deck_sync
+  vars_files:
+    - ../../../host_vars/autosec_prod/kong_mum.yml

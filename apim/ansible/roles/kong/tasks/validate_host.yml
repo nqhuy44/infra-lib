@@ -1,0 +1,32 @@
+---
+# Check connection to all hosts and pick the first reachable
+- name: Endplay if no kong_hosts defined
+  meta: end_play
+  when: kong_hosts is not defined or kong_hosts | length == 0
+  delegate_to: localhost
+  run_once: true
+
+- name: Check connection to kong instances (get HTTP status)
+  become: false
+  uri:
+    url: "http://{{ item }}:{{ kong_admin_port }}/"
+    method: GET
+    return_content: no
+    timeout: 5
+  register: connection_results
+  delegate_to: localhost
+  run_once: true
+  failed_when: false
+  loop: "{{ kong_hosts }}"
+
+- name: Get first reachable kong host
+  set_fact:
+    kong_host: "{{ (connection_results.results | selectattr('status', 'equalto', 200) | map(attribute='item') | list | first) | default(omit) }}"
+  delegate_to: localhost
+  run_once: true
+
+- name: Endplay if no kong host is reachable
+  meta: end_play
+  when:
+    - kong_host is not defined
+

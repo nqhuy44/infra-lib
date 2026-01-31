@@ -1,0 +1,43 @@
+---
+- name: Validate aws account
+  include_tasks: validate_aws.yml
+
+- name: Check kong host
+  include_tasks: validate_host.yml
+
+- name: Validate enabled projects
+  include_tasks: validate_project.yml
+
+- name: Validate files enabled projects
+  include_tasks: validate_file.yml
+
+- name: process secret
+  include_tasks: process_secret.yml
+
+- name: render kong configs
+  include_tasks: process_render.yml
+
+- name: Run deck validate
+  command: >
+    deck gateway validate --kong-addr "http://{{ kong_host }}:{{ kong_admin_port }}" "{{ kong_render_path }}"
+  register: deck_validate_results
+  ignore_errors: false
+  no_log: false
+
+- name: Run deck diff
+  shell: >
+    deck gateway diff --kong-addr "http://{{ kong_host }}:{{ kong_admin_port }}" "{{ kong_render_path }}" | tee "{{ working_dir }}/deck_diff_output.txt"
+  register: deck_diff_results
+  ignore_errors: true
+  no_log: false
+
+- name: Endplay if diff failed
+  meta: end_play
+  when:
+    - deck_diff_results.rc != 0
+
+- name: Show deck diff results
+  become: false
+  debug:
+    msg: "{{ deck_diff_results.stdout | default(deck_diff_results.stderr) }}"
+  when: deck_diff_results is defined and deck_diff_results.stdout | length > 0

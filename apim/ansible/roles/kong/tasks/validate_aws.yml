@@ -1,0 +1,47 @@
+---
+- name: Validate AWS account
+  assert:
+    that:
+      - aws_account_id is defined
+      - aws_account_id | length == 12
+    fail_msg: "Invalid AWS account ID"
+  delegate_to: localhost
+  run_once: true
+
+- name: Get running AWS account ID
+  become: false
+  command: aws sts get-caller-identity --query Account --output text
+  register: aws_account_check
+  failed_when: aws_account_check.rc != 0
+  changed_when: false
+  delegate_to: localhost
+  run_once: true
+
+- name: Endplay if AWS account ID not correct
+  meta: end_play
+  when: aws_account_id != aws_account_check.stdout
+
+- name: Get kong_hosts from aws ec2
+  shell: >
+    aws ec2 describe-instances
+    --filters "Name=tag:Name,Values=ci-*-apigw" "Name=instance-state-name,Values=running"
+    --query "Reservations[].Instances[].PrivateIpAddress"
+    --region {{ aws_region }}
+    --output text | tr '\t' '\n'
+  register: kong_hosts_aws
+  failed_when: kong_hosts_aws.rc != 0
+  changed_when: false
+  delegate_to: localhost
+  run_once: true
+  when: kong_hosts is not defined or kong_hosts | length == 0
+
+- name: Set kong_hosts from aws ec2
+  set_fact:
+    kong_hosts: "{{ kong_hosts_aws.stdout_lines }}"
+  when: kong_hosts is not defined or kong_hosts | length == 0
+  delegate_to: localhost
+  run_once: true
+
+- name: Endplay if no kong_hosts found
+  meta: end_play
+  when: kong_hosts is not defined or kong_hosts | length == 0

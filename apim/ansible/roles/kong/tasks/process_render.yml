@@ -1,0 +1,40 @@
+- name: Set render path
+  set_fact:
+    kong_render_path: "{{ temp_dir }}/rendered"
+
+- name: Create temporary directory for rendered files
+  file:
+    path: "{{ kong_render_path }}"
+    state: directory
+
+- name: Render Kong Helm chart for each temp file
+  vars:
+    temp_file_basename: "{{ item | basename }}"
+    rendered_file: "{{ kong_render_path }}/{{ temp_file_basename }}"
+  command: >
+    helm template kong {{ chart_dir }}
+      -f {{ item }}
+  register: kong_rendered
+  loop: "{{ kong_temp_files }}"
+  # no_log: true
+  delegate_to: localhost
+
+- name: Save rendered YAML for each temp file
+  copy:
+    dest: "{{ kong_render_path }}/{{ item.item | basename }}"
+    content: "{{ item.stdout }}"
+  no_log: true
+  loop: "{{ kong_rendered.results }}"
+  delegate_to: localhost
+
+- name: Get rendered file list
+  find:
+    paths: "{{ kong_render_path }}"
+    patterns: ["*.yml", "*.yaml"]
+  run_once: true
+  register: kong_rendered_files
+  delegate_to: localhost
+
+- name: Endplay if no rendered files found
+  meta: end_play
+  when: kong_rendered_files.matched == 0

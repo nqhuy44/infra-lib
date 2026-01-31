@@ -1,0 +1,4 @@
+apiVersion: v2
+name: kong-config-template
+description: Declarative Kong configuration with Helm templating
+version: 0.1.0
