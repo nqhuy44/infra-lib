@@ -9,12 +9,13 @@ resource "google_compute_disk" "additional" {
 }
 
 resource "google_compute_instance" "default" {
-  name           = var.name
-  machine_type   = var.machine_type
-  zone           = var.zone
-  project        = var.project_id
-  desired_status = var.instance_status
-  tags           = var.tags
+  name                = var.name
+  machine_type        = var.machine_type
+  zone                = var.zone
+  project             = var.project_id
+  desired_status      = var.instance_status
+  tags                = var.tags
+  deletion_protection = var.deletion_protection
 
   boot_disk {
     auto_delete = var.boot_disk_auto_delete

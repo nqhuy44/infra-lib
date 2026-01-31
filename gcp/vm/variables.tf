@@ -132,3 +132,9 @@ variable "instance_status" {
   type        = string
   default     = "RUNNING"
 }
+
+variable "deletion_protection" {
+  description = "Enable deletion protection on the instance."
+  type        = bool
+  default     = false
+}

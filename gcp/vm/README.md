@@ -7,53 +7,14 @@ This module creates a Compute Engine instance in Google Cloud Platform.
 ```hcl
 module "vm" {
   source          = "../../gcp/vm"
-  project_id      = "my-project-id"
-  name            = "example-vm"
-  machine_type    = "e2-micro"
-  zone            = "us-central1-a"
-  network         = "default"
-  subnetwork      = "default"
-  boot_disk_image = "debian-cloud/debian-11"
-  boot_disk_size  = 50
-  boot_disk_type  = "pd-ssd"
+  # ... (other variables)
   
   # Lifecycle Controls
   boot_disk_auto_delete = true
   instance_status       = "RUNNING"
+  deletion_protection   = true
   
-  # Optional: Public IP
-  assign_public_ip = true
-  
-  # Optional: IPv6
-  enable_ipv6      = true
-  
-  # Optional: Spot Instance
-  spot_instance    = true
-  
-  # Optional: Tags (e.g. from firewall)
-  tags = ["web-server", "ssh-access"]
-  
-  # Optional: SSH Keys
-  ssh_keys = [
-    {
-      user       = "myuser"
-      public_key = "ssh-rsa AAA..."
-    }
-  ]
-  
-  # Optional: Additional Data Disks
-  additional_disks = [
-    {
-      name = "data-disk",
-      size = 50,
-      type = "pd-standard"
-    },
-    {
-      name = "log-disk",
-      size = 20,
-      type = "pd-ssd"
-    }
-  ]
+  # ...
 }
 ```
 
@@ -74,6 +35,7 @@ module "vm" {
 | <a name="input_boot_disk_type"></a> [boot\_disk\_type](#input\_boot\_disk\_type) | Type of the boot disk (e.g., pd-standard, pd-ssd, pd-balanced). | `string` | `"pd-standard"` | no |
 | <a name="input_boot_disk_auto_delete"></a> [boot\_disk\_auto\_delete](#input\_boot\_disk\_auto\_delete) | Whether the boot disk should be auto-deleted when the instance is deleted. | `bool` | `true` | no |
 | <a name="input_instance_status"></a> [instance\_status](#input\_instance\_status) | The desired status of the instance (RUNNING or TERMINATED). | `string` | `"RUNNING"` | no |
+| <a name="input_deletion_protection"></a> [deletion\_protection](#input\_deletion\_protection) | Enable deletion protection on the instance. | `bool` | `false` | no |
 | <a name="input_additional_disks"></a> [additional\_disks](#input\_additional\_disks) | List of additional data disks to create and attach to the instance. | <pre>list(object({<br>    name        = string<br>    size        = number<br>    type        = optional(string, "pd-standard")<br>    device_name = optional(string)<br>  }))</pre> | `[]` | no |
 | <a name="input_assign_public_ip"></a> [assign\_public\_ip](#input\_assign\_public\_ip) | If true, assigns a public IPv4 address to the instance. | `bool` | `false` | no |
 | <a name="input_static_public_ip"></a> [static\_public\_ip](#input\_static\_public\_ip) | The static external IP address to assign to the instance. Requires assign_public_ip to be true. | `string` | `null` | no |
