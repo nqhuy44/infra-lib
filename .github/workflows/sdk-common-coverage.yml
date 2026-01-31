@@ -1,0 +1,58 @@
+name: Reusable SDK Code Coverage
+
+on:
+  workflow_call:
+    inputs:
+      commit_id:
+        required: true
+        type: string
+      runner_label:
+        required: false
+        type: string
+        default: ubuntu-latest
+
+jobs:
+  code_coverage:
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        id: install_rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install tarpaulin
+        run: |
+          cargo install cargo-tarpaulin
+
+      - name: Generate Clippy report
+        run: |
+          cargo clippy --message-format=json &> clippy-report.json
+
+      - name: Upload clippy report
+        uses: actions/upload-artifact@v4
+        with:
+          name: clippy-report
+          path: clippy-report.json
+
+      - name: Generate code coverage
+        run: |
+          cargo tarpaulin --timeout 120 --verbose --workspace --all-features --out Html
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: tarpaulin-report.html

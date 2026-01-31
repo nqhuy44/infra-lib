@@ -1,0 +1,211 @@
+name: Reusable workflow to mirror the repository
+
+on:
+  workflow_call:
+    inputs:
+      commit_id:
+        required: true
+        type: string
+      runner_label:
+        required: false
+        type: string
+        default: ubuntu-latest
+      aws_region:
+        required: false
+        type: string
+        default: "ap-southeast-1"
+      source_repo:
+        required: true
+        type: string # Public repository
+      source_repo_branch:
+        required: true
+        type: string
+      current_repo_name:
+        required: true
+        type: string # format: uneycom/repo
+      current_repo_default_branch:
+        required: false
+        type: string
+        default: "develop"
+      auto_approve:
+        description: "Automatically approve and merge the PR (true/false)"
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  clone_source_repo_and_mirror:
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write # Required to create and manage pull requests
+
+    steps:
+      ############## Setup Logging
+      - name: Setup logging
+        run: |
+          mkdir -p "$RUNNER_TEMP/logger" 
+          cat << 'EOF' > "$RUNNER_TEMP/logger/logger.sh" 
+          #!/bin/bash
+
+          LOG_LEVEL="DEBUG"           # Set to your desired log level
+
+          log() {
+            local level="$1"
+            local message="$2"
+            local timestamp=$(date +'%Y-%m-%d %H:%M:%S')
+
+            case "$level" in
+              "DEBUG")
+                if [ "$LOG_LEVEL" = "DEBUG" ]; then
+                  echo "$timestamp [$level] $message"
+                fi
+                ;;
+              "INFO"|"WARNING"|"ERROR")
+                echo "$timestamp [$level] $message"
+                ;;
+              *)
+                echo "$timestamp [UNKNOWN] $message"
+                ;;
+            esac
+          }
+          EOF
+
+          # Make the script executable
+          chmod +x "$RUNNER_TEMP/logger/logger.sh"
+      ############## Syncing the target Repo
+      - name: Setup temporary folder to store files in source repo
+        run: |
+          mkdir -p "$RUNNER_TEMP/source_repo"
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v5.1.1
+        with:
+          role-to-assume: arn:aws:iam::123456789:role/global-github-actions-role
+          aws-region: ${{ inputs.aws_region }}
+
+      # Prepare job to set up environment variables and credentials
+      - name: Get variables
+        id: vars
+        run: |
+          short_commit=$(echo '${{ inputs.commit_id }}' | cut -c1-7)
+
+          echo "SHORT_COMMIT=$short_commit" >> $GITHUB_ENV
+          echo "SOURCE_BRANCH=${{ inputs.source_repo_branch }}" >> $GITHUB_ENV
+
+      - name: Get GitHub secrets from AWS Secrets Manager
+        id: extract
+        run: |
+          secret_json=$(aws secretsmanager get-secret-value --secret-id github-action --query SecretString --output text --region us-east-1)
+
+          echo "GH_TOKEN=$(echo $secret_json | jq -r .GH_TOKEN)" >> $GITHUB_ENV
+          echo "GH_ID=$(echo $secret_json | jq -r .GH_ID)" >> $GITHUB_ENV
+          echo "APPROVED_GH_TOKEN=$(echo $secret_json | jq -r .APPROVED_GH_TOKEN)" >> $GITHUB_ENV
+          echo "APPROVED_GH_ID=$(echo $secret_json | jq -r .APPROVED_GH_ID)" >> $GITHUB_ENV
+
+      ### Clone the Source Repo
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.source_repo }}
+
+      - name: Copy all files in source repo
+        run: |
+          cp -r * "$RUNNER_TEMP/source_repo"
+
+      ### Clone the Current (Target) Repo and create PR
+      - name: Checkout current repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create new branch and update values
+        id: update_values
+        run: |
+          # Source the logger script to use the log function
+          source "$RUNNER_TEMP/logger/logger.sh"
+
+          git checkout -b feature/DVOP-000-${{ env.SHORT_COMMIT }}
+
+          log INFO "Removing all files in the current repository"
+
+          # remove all files and directories in the current directory while keeping the .git folder
+          rm -rf * 
+
+          # Copy the all files in source repo to target repo (exclude the folder .git)
+          cp -r "$RUNNER_TEMP/source_repo"/* .
+
+          git add .
+          # Add and commit changes
+          if git diff-index --quiet HEAD --; then
+              log ERROR "No changes detected, the current repository is updated to the source repository"
+              exit 1
+          else
+              log INFO "There are changes in the source repo"
+              log INFO "Committing changes to feature/DVOP-000-${{ env.SHORT_COMMIT }}"
+              git commit -m "DVOP-000: Updating changes from ${{ inputs.source_repo }}"
+              log INFO "Pushing changes to feature/DVOP-000-${{ env.SHORT_COMMIT }}"
+              git push origin feature/DVOP-000-${{ env.SHORT_COMMIT }}
+              log INFO "Pushed changes to feature/DVOP-000-${{ env.SHORT_COMMIT }}"
+          fi
+
+      - name: Create PR
+        id: create_pr
+        run: |
+          # Source the logger script to use the log function
+          source "$RUNNER_TEMP/logger/logger.sh"
+
+          pr_title="DVOP-000: CI - ${{ inputs.source_repo }} - ${{ env.SHORT_COMMIT }} - Auto-generated PR"
+          pr_body="This PR was automatically generated by the CI workflow to mirror the repository"
+          head="feature/DVOP-000-${{ env.SHORT_COMMIT }}"
+          base="${{inputs.current_repo_default_branch }}"
+          cat > pr_payload.json <<EOF
+          {
+            "title": "$pr_title",
+            "body": "$pr_body",
+            "head": "feature/DVOP-000-${{ env.SHORT_COMMIT }}",
+            "base": "${{inputs.current_repo_default_branch }}"
+          }
+          EOF
+
+          response=$(curl -s -X POST \
+            -u ${{ env.GH_ID }}:${{ env.GH_TOKEN }} \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ inputs.current_repo_name }}/pulls \
+            -d @pr_payload.json
+          )
+          echo "PR_NUMBER=$(echo ${response} | jq -r .number)" >> $GITHUB_ENV
+          echo "PR_URL=$(echo ${response} | jq -r .html_url)" >> $GITHUB_ENV
+          log INFO "Created PR: ${{ env.PR_URL }}"
+
+      - name: Add Label
+        run: |
+          curl -s -X POST \
+            -u ${{ env.GH_ID }}:${{ env.GH_TOKEN }} \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ inputs.current_repo_name }}/issues/${{ env.PR_NUMBER }}/labels \
+            -d '{"labels":["DVOP","auto-update"]}'
+
+      - name: Approve PR
+        if: ${{ inputs.auto_approve == true }}
+        run: |
+          curl -s -X POST \
+            -u ${{ env.APPROVED_GH_ID }}:${{ env.APPROVED_GH_TOKEN }} \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ inputs.current_repo_name }}/pulls/${{ env.PR_NUMBER }}/reviews \
+            -d '{"event":"APPROVE"}'
+
+      - name: Merge PR
+        if: ${{ inputs.auto_approve == true }}
+        run: |
+          curl -s -X PUT \
+            -u ${{ env.GH_ID }}:${{ env.GH_TOKEN }} \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ inputs.current_repo_name }}/pulls/${{ env.PR_NUMBER }}/merge \
+            -d '{"commit_title": "${{ inputs.pr_title }}", "merge_method": "squash"}'

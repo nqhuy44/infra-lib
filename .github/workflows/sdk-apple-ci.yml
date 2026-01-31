@@ -1,0 +1,91 @@
+name: Reusable SDK for build Apple package
+
+on:
+  workflow_call:
+    inputs:
+      commit_id:
+        required: true
+        type: string
+      runner_label:
+        required: false
+        type: string
+        default: macos-latest
+      project:
+        description: 'Project Directory to build Apple package'
+        required: true
+        type: string
+        default: ""
+      package_name:
+        description: 'Package name for Apple Swift'
+        required: true
+        type: string
+        default: ""
+      platform:
+        description: "Built Platform for Apple: macos, ios, tvos, watchos, visionos"
+        required: true
+        type: string
+
+jobs:
+  build_apple_packages:
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Rust toolchain
+        id: install_rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+
+      - name: Install cargo-swift
+        id: install_cargo_swift
+        run: | 
+          cargo install cargo-swift --version 0.9.0 --locked
+
+      - name: Check Platform Input
+        run: |
+          # Function to validate platform input
+          is_valid_platform() {
+              local input="$1"
+              # Regular expression to match valid platform input
+              if [[ $input =~ ^(macos|ios|tvos|watchos|visionos)(\ (macos|ios|tvos|watchos|visionos))*$ ]]; then
+                  return 0  # Valid input
+              else
+                  return 1  # Invalid input
+              fi
+          }
+
+          # Get the platform input from GitHub Actions
+          platform_input="${{ inputs.platform }}"
+
+          # Validate the input
+          if is_valid_platform "$platform_input"; then
+              echo "Valid input: $platform_input"
+          else
+              echo "Invalid input apple platform. Please use spaces, not commas."
+              exit 1  # Exit with a non-zero status to fail the job
+          fi
+
+      - name: Build Apple static libs
+        id: build_Apple_static_libs
+        run: |
+          cd crates/${{ inputs.project }}
+          cargo swift package -n ${{ inputs.package_name }} -p ${{ inputs.platform }} -r --lib-type static -y
+          APPLE_PACKAGE_PATH=$(pwd)/${{ inputs.package_name }}
+          echo "APPLE_PACKAGE_PATH=$APPLE_PACKAGE_PATH" >> $GITHUB_ENV
+
+      - name: Upload Apple artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.package_name }}
+          path: ${{ env.APPLE_PACKAGE_PATH }}

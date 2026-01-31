@@ -1,0 +1,77 @@
+name: Reusable Trivy FileSystem Scan
+
+on:
+  workflow_call:
+    inputs:
+      runner_label:
+        required: false
+        type: string
+        default: ubuntu-latest
+      severity:
+        required: false
+        type: string
+        default: "MEDIUM,HIGH,CRITICAL"
+      trivy_timeout:
+        required: false
+        type: string
+        default: "10m"
+      skip_dir:
+        required: false
+        type: string
+        default: ""
+      exit_code:
+        required: false
+        type: string
+        default: "0"
+      scanners:
+        required: false
+        type: string
+        default: "vuln"
+      output:
+        required: false
+        type: string
+        default: "trivy.txt"
+      format:
+        required: false
+        type: string
+        default: "table"
+
+jobs:
+  trivy_fs_scan:
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      contents: read
+      pull-requests: write 
+      security-events: write 
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Generate SBOM AND Scan for vulnerabilities
+        uses: aquasecurity/trivy-action@0.33.1
+        with: 
+          scan-type: "fs"
+          output: ${{ inputs.output }}
+          format: ${{ inputs.format }}
+          severity: ${{ inputs.severity }}
+          scanners: ${{ inputs.scanners }}
+          exit-code: ${{ inputs.exit_code }}
+          timeout: ${{ inputs.trivy_timeout }}
+          skip-dirs: ${{ inputs.skip_dir }}
+      
+      - name: Publish Trivy Output to Summary
+        run: |
+          if [[ -s ${{ inputs.output }} ]]; then
+            {
+              echo "### Security Output"
+              echo "<details><summary>Click to expand</summary>"
+              echo ""
+              echo '```terraform'
+              cat ${{ inputs.output }}
+              echo '```'
+              echo "</details>"
+            } >> $GITHUB_STEP_SUMMARY
+          fi 

@@ -1,0 +1,4 @@
+{{- range $jobs := .Values.cronjobs }}
+{{ include "cronjob.template" (dict "cronjob" $jobs "image" $.Values.image "hostAliases" $.Values.hostAliases "Values" $.Values) }}
+---
+{{- end }}

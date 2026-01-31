@@ -1,0 +1,122 @@
+name: Reusable Tofu Plan Workflow
+
+on:
+  workflow_call:
+    inputs:
+      runner_label:
+        required: true
+        type: string
+        default: ubuntu-latest
+      aws_region:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      tf_dir:
+        required: true
+        type: string
+      tf_module_https:
+        required: false
+        type: string
+        default: true
+      tf_exclude:
+        required: false
+        type: string
+        default: ""
+      tf_apply:
+        required: false
+        type: string
+        default: true
+      plan_output:
+        required: false
+        type: string
+        default: true
+      gh_secret_id:
+        required: false
+        type: string
+        default: github-action
+      gh_secret_key:
+        required: false
+        type: string
+        default: GH_TOKEN
+      gh_secret_region:
+        required: false
+        type: string
+        default: us-east-1
+
+jobs:
+  tofu-apply:
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          clean: true
+
+      - name: Set AWS Account ID
+        id: set_account
+        run: |
+          if [[ "${{ inputs.environment }}" = "prod" ]]; then
+            echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+          else
+            echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+          fi
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v5.1.1
+        with:
+          role-to-assume: arn:aws:iam::${{ env.ACCOUNT_ID }}:role/global-github-actions-role
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Modify tf_module_https
+        if: ${{ inputs.tf_module_https == 'true' }}
+        working-directory: ${{ inputs.tf_dir }}
+        run: |
+          # in local.tf Update variable github_url_base from ssh to https
+          cp local.tf _local.tf.bak
+          sed -i 's|git@github.com:|git::https://github.com/|' local.tf
+
+      - name: Rename exclude files
+        if: ${{ inputs.tf_exclude != '' }}
+        working-directory: ${{ inputs.tf_dir }}
+        run: |
+          IFS=',' read -ra EXCLUDE_FILES <<< "${{ inputs.tf_exclude }}"
+          for file in "${EXCLUDE_FILES[@]}"; do
+            if [ -f "${file}" ]; then
+              mv "${file}" "_${file}.bak"
+            fi
+          done
+
+      - name: Setup Git credentials for modules
+        if: ${{ inputs.tf_module_https == 'true' }}
+        run: |
+          secret_json=$(aws secretsmanager get-secret-value --secret-id ${{ inputs.gh_secret_id }} --query SecretString --output text --region ${{ inputs.gh_secret_region }})
+          gh_token=$(echo $secret_json | jq -r .${{ inputs.gh_secret_key }})
+          echo "::add-mask::${gh_token}"
+          git config --global url."https://x-access-token:${gh_token}@github.com/".insteadOf "https://github.com/"
+
+      - name: Tofu init
+        working-directory: ${{ inputs.tf_dir }}
+        run: tofu init -input=false -upgrade
+
+      - name: Tofu Plan
+        id: tf-plan
+        working-directory: ${{ inputs.tf_dir }}
+        run: |
+          tofu plan -no-color -input=false -out=tfplan -detailed-exitcode -compact-warnings -concise || exitcode=$?
+          # Output the exit code for the next steps to use
+          echo "exitcode=${exitcode}" >> $GITHUB_OUTPUT
+
+      - name: Apply Terraform changes
+        id: tf-apply
+        if: ${{ inputs.tf_apply == 'true' && (steps.tf-plan.outputs.exitcode == '0' || steps.tf-plan.outputs.exitcode == '2') }}
+        working-directory: ${{ inputs.tf_dir }}
+        run: |
+          tofu apply -input=false -auto-approve tfplan

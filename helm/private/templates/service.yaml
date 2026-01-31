@@ -1,0 +1,23 @@
+{{- if .Values.enabledDeployment }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ template "chart.fullname" $ }}
+  labels:
+    tier: {{ .Values.tier }}
+spec:
+  type: {{ .Values.service.type }}
+  {{- if or (eq .Values.service.type "LoadBalancer") (eq .Values.service.type "NodePort") }}
+  externalTrafficPolicy: {{ .Values.service.externalTrafficPolicy | quote }}
+  {{- end }}
+  selector:
+    app: {{ .Values.name }}
+    tier: {{ .Values.tier }}
+  ports:
+  - protocol: TCP
+    port: {{ .Values.service.port }}
+    targetPort: {{ .Values.image.containerPort }}
+    {{- if and (or (eq .Values.service.type "NodePort") (eq .Values.service.type "LoadBalancer")) (not (empty .Values.service.nodePorts.http)) }}
+    nodePort: {{ .Values.service.nodePorts.http }}
+    {{- end }}
+{{- end }}

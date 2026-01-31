@@ -1,0 +1,25 @@
+{{- if .Values.service.grpc.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ template "chart.fullname" $ }}-headless
+  labels:
+    app: {{ .Values.name }}
+    tier: {{ .Values.tier }}
+    type: headless
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app: {{ .Values.name }}
+    tier: {{ .Values.tier }}
+  ports:
+  {{- if .Values.service.grpc }}
+  {{- if .Values.service.grpc.enabled }}
+  - protocol: TCP
+    port: {{ .Values.service.grpc.port }}
+    targetPort: {{ .Values.service.grpc.targetPort | default .Values.service.grpc.port }}
+    name: grpc
+  {{- end }}
+  {{- end }}
+{{- end }}

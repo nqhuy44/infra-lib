@@ -1,0 +1,193 @@
+{{- if .Values.preInstalls }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "{{ .Values.preInstalls.name }}-hook-pre"
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion }}
+    helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+  annotations:
+    # This is what defines this resource as a hook. Without this line, the
+    # job is considered part of the release.
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-failed
+    "helm.sh/depends-on": {{ template "secretName" $ }}
+
+spec:
+  template:
+    metadata:
+      name: {{ .Values.preInstalls.name }}
+      labels:
+        app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+        app.kubernetes.io/instance: {{ .Release.Name | quote }}
+        helm.sh/chart: "{{ .Chart.Name }}-{{ .Chart.Version }}"
+        {{- if .Values.podLabels }}
+        {{- toYaml .Values.podLabels | nindent 8 }}
+        {{- end }}
+    spec:
+      restartPolicy: Never
+      {{- if .Values.serviceAccount.enabled }}
+      serviceAccountName: {{ template "saName" $ }}
+      {{- end }}
+      containers:
+      - name: {{ .Values.preInstalls.name }}-pre-install-job
+        image: {{ include "imagePreInstall" $ }}
+        {{- if .Values.envs }}
+        env:
+        {{- range $k, $v := .Values.envs }}
+          - name: {{ $k }}
+            value: {{ $v | quote}}
+        {{- end }}
+        {{- end }}
+        {{- if .Values.preInstalls.command }}
+        {{- if gt (len .Values.preInstalls.command) 0 }}
+        command:
+          - /bin/sh
+          - -c 
+          - |
+          {{- range .Values.preInstalls.command }}
+            {{ . }}
+          {{- end }}
+        {{- end }}
+        {{- end }}
+        # VOLUME MOUNT #
+        volumeMounts:
+          {{- if .Values.mounts }}
+          {{- range .Values.mounts }}
+          - name: "{{ template "chart.fullname" $ }}-volume"
+            mountPath: {{ .mountPath }}
+            subPath: {{ .filename }}
+            readOnly: true
+          {{- end }}
+          {{- end }}
+
+          # External ENV by file #
+          {{- if and (.Values.externalEnvFromCM.enabled) (eq .Values.externalEnvFromCM.type "file") }}
+          - mountPath: "{{ .Values.externalEnvFromCM.mountPath }}"
+            name: {{ template "configmapName" $ }}
+            subPath: {{ template "envFile" $ }}
+            readOnly: {{ template "externalEnvReadOnly" $ }}
+          {{- end }}
+
+          {{- if .Values.externalEnvFromAWS.enabled }}
+          - name: {{ template "secretName" $ }}
+            mountPath: {{ "/mnt/secret" }}
+          {{- end }}
+
+          # Extra configmap with type is file#
+          {{- range .Values.externalData }}
+          {{- if eq .type "file" }}
+          - mountPath: {{ .mountPath }}
+            name: {{ .name }}
+            subPath: {{ .fileName }}
+            readOnly: {{ .readOnly }}
+          {{- end }}
+          {{- end }}
+
+          # Persistenct volume RWM #
+          {{- if .Values.persistentVolume.enabled }}
+          - mountPath: "{{ .Values.persistentVolume.mountPath }}"
+            subPath: "{{ .Values.persistentVolume.subPath }}"
+            # Persistenct volume EXISTS #
+            {{- if .Values.persistentVolume.existingClaim }}
+            name: "{{ .Values.persistentVolume.name }}"
+            {{- else }}
+            # Persistenct volume CREATE-NEW #
+            name: "{{ template "chart.fullname" $ }}-persistent-volume"
+            {{- end }}
+          {{- end }}
+
+        # Env with external type variable #
+        {{- if or (.Values.externalEnvFromAWS.enabled) (.Values.externalEnvFromVault.enabled) (and (.Values.externalEnvFromCM.enabled) (eq .Values.externalEnvFromCM.type "variable")) }}
+        envFrom:
+          # Default map to configmap #
+        - configMapRef:
+            name: {{ template "configmapName" $ }}
+          # ENV with external by secret #
+        {{- if or (.Values.externalEnvFromAWS.enabled) (.Values.externalEnvFromVault.enabled) }}
+        - secretRef:
+            name: {{ template "secretName" $ }}
+        {{- end }}
+        {{- end }}
+
+      {{- if .Values.image.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml .Values.image.imagePullSecrets | nindent 8 }}
+      {{- end }}
+
+      #        #
+      # VOLUME #
+      #        #
+      volumes:
+        # Basic mount RWO #
+        {{- if .Values.mounts }}
+        - name: "{{ template "chart.fullname" $ }}-volume"
+          configMap:
+            name: "{{ template "chart.fullname" $ }}"
+            items:
+              {{- range .Values.mounts }}
+              - key: {{ .name }}
+                path: {{ .filename }}
+              {{- end }}
+        {{- else }}
+        {{- "\n        # mounts value is empty" }}
+        {{- end }}
+
+        # configmap #
+        {{- if and (eq .Values.externalEnvFromCM.type "file") (.Values.externalEnvFromCM.enabled) }}
+        - name: {{ template "configmapName" $ }}
+          configMap:
+            name: {{ template "configmapName" $ }}
+        {{- else }}
+        {{- "\n        # externalEnv is not enabled" }}
+        {{- end }}
+
+        # secret #
+        {{- if .Values.externalEnvFromAWS.enabled }}
+        - name: {{ template "secretName" $ }}
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ template "secretName" $ }}
+        {{- else }}
+        {{- "\n        # externalEnvFromAWS is not enabled" }}
+        {{- end }}
+
+        # Extra configmaps #
+        {{- range .Values.externalData }}
+        {{- if eq .type "file" }}
+        - name: {{ .name }}
+          configMap:
+            name: {{ .name }}
+        {{- end }}
+        {{- end }}
+
+        # Persistenct volume RWM #
+        {{- if .Values.persistentVolume.enabled }}
+        - name: "{{ .Values.persistentVolume.name  }}"
+          persistentVolumeClaim:
+            {{- if .Values.persistentVolume.existingClaim }}
+            claimName: "{{ .Values.persistentVolume.existingClaim }}"
+            {{- else }}
+            claimName: "{{ template "chart.fullname" $ }}"
+            {{- end }}
+        {{- else }}
+        {{- "\n        # persistentVolume is not enabled" }}
+        {{- end }}
+
+      # Node affinity 
+      {{- if .Values.affinity }}
+      affinity: {{- toYaml .Values.affinity | nindent 8 }}
+      {{- else }}
+      {{- "\n        # affinity is not enabled" }}
+      {{- end }}
+      {{- if .Values.nodeSelector }}
+      nodeSelector: {{- toYaml .Values.nodeSelector | nindent 8 }}
+      {{- end }}
+      {{- if .Values.tolerations }}
+      tolerations: {{- toYaml .Values.tolerations | nindent 6 }}
+      {{- end }}
+{{- end }}

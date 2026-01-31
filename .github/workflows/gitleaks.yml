@@ -1,0 +1,61 @@
+name: Reusable GitLeaks
+
+on:
+  workflow_call:
+    inputs:
+      commit_id:
+        required: true
+        type: string
+      runner_label:
+        required: false
+        type: string
+        default: k8s
+
+jobs:
+  code_coverage:
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks Scan
+        id: gitleaks-scan
+        run: |
+          set -e
+          echo "Running gitleaks scan..."
+          gitleaks detect --source . --redact -v --no-banner --no-color > gitleaks.txt 2>&1 || true
+          NO_LEAKS=$(grep -c "no leaks found" gitleaks.txt || true)
+          if [[ $NO_LEAKS -eq 0 ]]; then
+            echo "leaks_found=true" >> $GITHUB_OUTPUT
+            echo "report<<EOF" >> $GITHUB_OUTPUT
+            cat gitleaks.txt >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "leaks_found=false" >> $GITHUB_OUTPUT
+            echo "report<<EOF" >> $GITHUB_OUTPUT
+            echo "✅ No secrets found." >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Comment Gitleaks Report on PR
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: Gitleaks Report
+          message: |
+            ```bash
+            ${{ steps.gitleaks-scan.outputs.report }}
+            ```
+
+      - name: Fail workflow if leaks found
+        if: ${{ steps.gitleaks-scan.outputs.leaks_found == 'true' }}
+        run: |
+          echo "❌ Gitleaks found secrets!"
+          exit 1

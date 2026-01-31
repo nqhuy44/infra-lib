@@ -1,0 +1,201 @@
+name: Infra Scan Workflow
+
+on:
+  workflow_call:
+    inputs:
+      runner_label:
+        required: true
+        type: string
+        default: ubuntu-latest
+      enable_gitleaks:
+        required: true
+        type: boolean
+        default: true
+      enable_checkov:
+        required: true
+        type: boolean
+        default: true
+      enable_tfsec:
+        required: true
+        type: boolean
+        default: true
+      module_repo:
+        required: true
+        type: string
+      module_commit_id:
+        required: true
+        type: string
+      trivy_self_host:
+        required: false
+        type: boolean
+        default: false
+      trivy_skip_dir:
+        required: false
+        type: string
+        default: ""
+      trivy_timeout:
+        required: false
+        type: string
+        default: "5m"
+      trivy_host:
+        required: false
+        type: string
+        default: "https://nonprod-common-trivy.qualgo.dev"
+
+jobs:
+  infra-scan:
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::123456789:role/global-github-actions-role
+          aws-region: us-east-1
+
+      - name: Get GitHub secrets from AWS Secrets Manager
+        id: extract
+        run: |
+          secret_json=$(aws secretsmanager get-secret-value --secret-id github-action --query SecretString --output text --region us-east-1)
+
+          echo "GH_TOKEN=$(echo $secret_json | jq -r .GH_TOKEN)" >> $GITHUB_ENV
+          echo "TARGET_BRANCH=develop" >> $GITHUB_ENV
+
+      - name: Checkout terraform module
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.module_repo }}
+          ref: ${{ inputs.module_commit_id }}
+          token: ${{ env.GH_TOKEN }}
+          path: module
+
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          path: source
+
+      - name: Gitleaks Scan
+        id: gitleaks-scan
+        if: ${{ inputs.enable_gitleaks == true }}
+        run: |
+          set -e
+          echo "Running gitleaks scan..."
+          leaks_status=$(gitleaks detect --source ./source --redact -v --no-banner --no-color > gitleaks.txt 2>&1; echo $?)
+          if [[ $leaks_status -ne 0 ]]; then
+            echo "leaks_found=true" >> $GITHUB_OUTPUT
+            echo "report<<EOF" >> $GITHUB_OUTPUT
+            echo "❌ Gitleaks found secrets!" >> $GITHUB_OUTPUT
+            cat gitleaks.txt >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "leaks_found=false" >> $GITHUB_OUTPUT
+            echo "report<<EOF" >> $GITHUB_OUTPUT
+            echo "✅ No leaks found." >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Comment Gitleaks Report on PR
+        if: ${{ github.event_name == 'pull_request' && inputs.enable_gitleaks == true }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: Gitleaks Report
+          message: |
+            ```
+            ${{ steps.gitleaks-scan.outputs.report }}
+            ```
+
+      - name: Fail workflow if leaks found
+        if: ${{ steps.gitleaks-scan.outputs.leaks_found == 'true' && inputs.enable_gitleaks == true }}
+        run: |
+          echo "❌ Gitleaks found secrets!"
+          exit 1
+
+      - name: Checkov Scan
+        id: checkov-scan
+        if: ${{ inputs.enable_checkov == true }}
+        run: |
+          set -e
+          echo "Running Checkov scan..."
+          checkov_status=$(checkov -d ./source --external-modules-download-path ./module --output-file-path . > /dev/null 2>&1; echo $?)
+          if [[ $checkov_status -ne 0 ]]; then
+            echo "scan_failed=true" >> $GITHUB_OUTPUT
+            echo "report<<EOF" >> $GITHUB_OUTPUT
+            echo "❌ Checkov found issues!" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT
+            echo "### Full Checkov Report" >> $GITHUB_OUTPUT
+            cat ./results_cli.txt >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "scan_failed=false" >> $GITHUB_OUTPUT
+            echo "report<<EOF" >> $GITHUB_OUTPUT
+            echo "✅ All Checkov checks passed!" >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT
+            echo "### Full Checkov Report" >> $GITHUB_OUTPUT
+            cat ./results_cli.txt >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Comment Checkov Report on PR
+        if: ${{ github.event_name == 'pull_request' && inputs.enable_checkov == true }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: Checkov Report
+          message: |
+            ```
+            ${{ steps.checkov-scan.outputs.report }}
+            ```
+
+      - name: Fail workflow if issues found
+        if: ${{ steps.checkov-scan.outputs.scan_failed == 'true' && inputs.enable_checkov == true }}
+        run: |
+          echo "❌ Checkov found issues!"
+          exit 1
+
+      - name: Run Trivy vulnerability scanner in Trivy self host
+        if: ${{ inputs.trivy_self_host }}
+        run: |
+          export TRIVY_SERVER="${{ inputs.trivy_host }}"
+          echo "Trivy Server: $TRIVY_SERVER"
+          trivy config .
+
+      - name: Run Trivy vulnerability scanner
+        id: trivy-scan
+        if: ${{ inputs.trivy_self_host == false }}
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "table"
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: "os,library"
+          severity: "CRITICAL,HIGH"
+          skip-dirs: ${{ inputs.trivy_skip_dir }}
+          timeout: ${{ inputs.trivy_timeout }}
+          output: trivy-report.txt
+        env:
+          TRIVY_DISABLE_VEX_NOTICE: true
+        continue-on-error: true
+
+      - name: Collect Trivy report
+        id: trivy-report
+        if: failure() && steps.trivy-scan.outcome == 'failure'
+        run: |
+          echo "report<<EOF" >> $GITHUB_OUTPUT
+          cat trivy-report.txt >> $GITHUB_OUTPUT || echo "No report found"
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Comment Trivy Report on PR
+        if: ${{ github.event_name == 'pull_request' && steps.trivy-scan.outcome == 'failure' }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: Trivy Report
+          message: |
+            ```
+            ${{ steps.trivy-report.outputs.report }}
+            ```

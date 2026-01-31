@@ -1,0 +1,218 @@
+name: Update ArgoCD Values and Merge PR
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: "Service name to be used in the PR title"
+        required: true
+        type: string
+      environment:
+        description: "Environment for the PR (e.g., dev, staging, prod)"
+        required: true
+        type: string
+      commit_id:
+        description: "Commit ID to be used in the PR title"
+        required: true
+        type: string
+      assest_repo:
+        required: true
+        type: string # Format: org/repo
+      runner_label:
+        required: false
+        type: string
+        default: k8s
+      auto_approve:
+        description: "Automatically approve and merge the PR (true/false)"
+        required: false
+        type: boolean
+        default: true
+      sonar_secret_id:
+        required: false
+        type: string
+      sonar_token_secret_key:
+        required: false
+        type: string
+      sonar_scan_dir:
+        required: false
+        type: string
+        default: .
+      aws_region:
+        required: false
+        type: string
+      sonar_scan:
+        required: false
+        type: boolean
+        default: false
+
+    secrets:
+      GH_ID:
+        required: false
+      GH_TOKEN:
+        required: false
+      APPROVED_GH_TOKEN:
+        required: false
+      APPROVED_GH_ID:
+        required: false
+
+jobs:
+  argocd-cd:
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      contents: write # Required to push changes to the repository
+      pull-requests: write # Required to create and manage pull requests
+      id-token: write
+    outputs:
+      SHORT_COMMIT: ${{ steps.vars.outputs.short_commit }}
+      IMAGE_TAG: ${{ steps.vars.outputs.image_tag }}
+      SOURCE_BRANCH: ${{ steps.vars.outputs.source_branch }}
+      TARGET_BRANCH: ${{ steps.vars.outputs.target_branch }}
+      #### GIT CREDENTIALS
+      GH_TOKEN: ${{ steps.extract.outputs.GH_TOKEN }}
+      GH_ID: ${{ steps.extract.outputs.GH_ID }}
+      APPROVED_GH_TOKEN: ${{ steps.extract.outputs.APPROVED_GH_TOKEN }}
+      APPROVED_GH_ID: ${{ steps.extract.outputs.APPROVED_GH_ID }}
+    steps:
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v5.1.1
+        with:
+          role-to-assume: arn:aws:iam::123456789:role/global-github-actions-role
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # Shallow clones should be disabled for a better relevancy of analysis
+
+      - name: Get Sonar secrets from AWS Secrets Manager
+        if: ${{ inputs.sonar_scan }}
+        run: |
+          secret_json=$(aws secretsmanager get-secret-value --secret-id ${{inputs.sonar_secret_id}} --query SecretString --output text --region ${{ inputs.aws_region }})
+
+          echo "SONAR_TOKEN=$(echo $secret_json | jq -r .${{ inputs.sonar_token_secret_key }})" >> $GITHUB_ENV
+          echo "SONAR_HOST_URL=$(echo $secret_json | jq -r .SONAR_HOST_URL)" >> $GITHUB_ENV
+
+      - name: SonarQube Scan
+        if: ${{ inputs.sonar_scan }}
+        uses: sonarsource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+        with:
+          projectBaseDir: ${{ inputs.sonar_scan_dir }}
+        continue-on-error: true
+
+      - name: SonarQube Quality Gate check
+        if: ${{ inputs.sonar_scan }}
+        uses: SonarSource/sonarqube-quality-gate-action@v1.2.0
+        env:
+          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+        with:
+          scanMetadataReportFile: ${{ inputs.sonar_scan_dir }}/.scannerwork/report-task.txt
+        continue-on-error: true
+
+      ### Prepare job to set up environment variables and credentials
+      - name: Get variables
+        id: vars
+        run: |
+          short_commit=$(echo '${{ inputs.commit_id }}' | cut -c1-7)
+
+          echo "SHORT_COMMIT=$short_commit" >> $GITHUB_ENV
+          echo "IMAGE_TAG=v$short_commit-${{ inputs.environment }}" >> $GITHUB_ENV
+          echo "SOURCE_BRANCH=feature/DVOP-000-ci-${{ inputs.service_name }}-${{ inputs.environment }}-$short_commit" >> $GITHUB_ENV
+          echo "TARGET_BRANCH=develop" >> $GITHUB_ENV
+
+      - name: Get GitHub secrets from AWS Secrets Manager
+        id: extract
+        run: |
+          secret_json=$(aws secretsmanager get-secret-value --secret-id github-action --query SecretString --output text --region us-east-1)
+
+          echo "GH_TOKEN=$(echo $secret_json | jq -r .GH_TOKEN)" >> $GITHUB_ENV
+          echo "GH_ID=$(echo $secret_json | jq -r .GH_ID)" >> $GITHUB_ENV
+          echo "APPROVED_GH_TOKEN=$(echo $secret_json | jq -r .APPROVED_GH_TOKEN)" >> $GITHUB_ENV
+          echo "APPROVED_GH_ID=$(echo $secret_json | jq -r .APPROVED_GH_ID)" >> $GITHUB_ENV
+
+      ### Update Helm values and create PR
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.assest_repo }}
+          ref: ${{ env.TARGET_BRANCH }} # target base branch
+          token: ${{ env.GH_TOKEN }} # Use the token from the prepare job
+
+      - name: Set up Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create new branch and update values
+        id: update_values
+        run: |
+          git checkout -b ${{ env.SOURCE_BRANCH }}
+
+          echo "Updating values.yaml"
+          # Example: Update image tag in values.yaml (replace this logic with your own needs)
+          sed -i "s/tag: [^ ]*/tag: ${{ env.IMAGE_TAG }}/g" argocd/apps/${{ inputs.service_name }}/${{ inputs.environment }}/values.yaml
+
+          echo "Updated image tag to ${image_tag} in values.yaml"
+          echo "Committing changes to $source_branch"
+
+          # Add and commit changes
+          git add argocd/apps/${{ inputs.service_name }}/${{ inputs.environment }}/values.yaml
+          git commit -m "DVOP-000: bump image tag to ${{ env.IMAGE_TAG }} for ${{ inputs.service_name }} in ${{ inputs.environment }}"
+          echo "Pushing changes to ${{ env.SOURCE_BRANCH }}"
+          git push origin ${{ env.SOURCE_BRANCH }}
+          echo "Pushed changes to ${{ env.SOURCE_BRANCH }}"
+
+      - name: Create PR
+        id: create_pr
+        run: |
+          pr_title="DVOP-000: CI - ${{ inputs.service_name }} ${{ inputs.environment }} - Auto-generated PR"
+          pr_body="This PR was automatically generated by the CI workflow to update the image tag"
+          head="${{ env.SOURCE_BRANCH }}"
+          base="${{ env.TARGET_BRANCH }}"
+          cat > pr_payload.json <<EOF
+          {
+            "title": "$pr_title",
+            "body": "$pr_body",
+            "head": "${{ env.SOURCE_BRANCH }}",
+            "base": "${{ env.TARGET_BRANCH }}"
+          }
+          EOF
+
+          response=$(curl -s -X POST \
+            -u ${{ env.GH_ID }}:${{ env.GH_TOKEN }} \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ inputs.assest_repo }}/pulls \
+            -d @pr_payload.json
+          )
+          echo "PR_NUMBER=$(echo ${response} | jq -r .number)" >> $GITHUB_ENV
+          echo "PR_URL=$(echo ${response} | jq -r .html_url)" >> $GITHUB_ENV
+          echo "Created PR: ${{ env.PR_URL }}"
+
+      - name: Add Label
+        run: |
+          curl -s -X POST \
+            -u ${{ env.GH_ID }}:${{ env.GH_TOKEN }} \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ inputs.assest_repo }}/issues/${{ env.PR_NUMBER }}/labels \
+            -d '{"labels":["argocd","auto-update"]}'
+
+      - name: Approve PR
+        if: ${{ inputs.auto_approve == true }}
+        run: |
+          curl -s -X POST \
+            -u ${{ env.APPROVED_GH_ID }}:${{ env.APPROVED_GH_TOKEN }} \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ inputs.assest_repo }}/pulls/${{ env.PR_NUMBER }}/reviews \
+            -d '{"event":"APPROVE"}'
+
+      - name: Merge PR
+        if: ${{ inputs.auto_approve == true }}
+        run: |
+          curl -s -X PUT \
+            -u ${{ env.GH_ID }}:${{ env.GH_TOKEN }} \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ inputs.assest_repo }}/pulls/${{ env.PR_NUMBER }}/merge \
+            -d '{"commit_title": "${{ inputs.pr_title }}", "merge_method": "squash"}'

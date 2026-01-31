@@ -1,0 +1,4 @@
+{{- range $worker := .Values.workers }}
+{{ include "worker.template" (dict "worker" $worker "image" $.Values.image "hostAliases" $.Values.hostAliases "Values" $.Values) }}
+---
+{{- end }}

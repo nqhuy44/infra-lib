@@ -1,0 +1,63 @@
+name: Reusable S3 push workflow
+
+on:
+  workflow_call:
+    inputs:
+      aws_region:
+        required: true
+        type: string
+      s3_bucket:
+        required: true
+        type: string
+      source_dir:
+        required: true
+        type: string
+      dest_dir:
+        required: true
+        type: string
+      commit_id:
+        required: false
+        type: string
+      environment:
+        required: false
+        type: string
+        default: dev
+      runner_label:
+        required: false
+        type: string
+        default: ubuntu-latest
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: false
+      AWS_SECRET_ACCESS_KEY:
+        required: false
+
+jobs:
+  s3-push:
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Set AWS Account ID
+        id: set_account
+        run: |
+          if [ "${{ inputs.environment }}" = "prod" ]; then
+              echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+          else
+              echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+          fi
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v5.1.1
+        with:
+          role-to-assume: arn:aws:iam::${{ env.ACCOUNT_ID }}:role/global-github-actions-role
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Sync files to S3
+        run: |
+          aws s3 sync ${{ inputs.source_dir }} s3://${{ inputs.s3_bucket }}/${{ inputs.dest_dir }} --region ${{ inputs.aws_region }}

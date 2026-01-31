@@ -1,0 +1,165 @@
+name: Reusable mingration DB Workflow
+
+on:
+  workflow_call:
+    inputs:
+      aws_region:
+        required: true
+        type: string
+      eks_cluster:
+        required: true
+        type: string
+      eks_namespace:
+        required: true
+        type: string
+      aws_secret_name:
+        required: true
+        type: string
+      runner_label:
+        required: false
+        type: string
+        default: k8s
+jobs:
+  migrate_db:
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          role-to-assume: arn:aws:iam::123456789:role/global-github-actions-role
+          aws-region: ${{ inputs.aws_region }}
+
+      # Get secrets from AWS Secrets Manager
+      - name: Get Secrets from AWS Secrets Manager
+        run: |
+          # Fetch the secret value
+          SECRET_VALUE=$(aws secretsmanager get-secret-value \
+              --secret-id ${{ inputs.aws_secret_name }} \
+              --query SecretString \
+              --output text \
+              --region ${{ inputs.aws_region }})
+
+          # Parse each key-value in the secret JSON and export as GitHub env vars
+          for key in $(echo "$SECRET_VALUE" | jq -r 'keys[]'); do
+            value=$(echo "$SECRET_VALUE" | jq -r --arg k "$key" '.[$k]')
+            
+            # Mask secret so it never appears in logs
+            echo "::add-mask::$value"
+            
+            # Export as environment variable
+            echo "$key=$value" >> $GITHUB_ENV
+          done
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --region ${{ inputs.aws_region }} --name ${{ inputs.eks_cluster }}
+
+      - name: Create migration pod
+        run: |
+          cat <<EOF | kubectl apply --validate=false -f -
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: db-migration-pod
+            namespace: ${{ inputs.eks_namespace }}
+            labels:
+              app: db-migration
+              job: migration
+          spec:
+            restartPolicy: Always
+            containers:
+            - name: migration-runner
+              image: postgres:15-alpine
+              command: ["/bin/sh"]
+              args: ["-c", "apk add --no-cache curl && curl -L https://github.com/pressly/goose/releases/latest/download/goose_linux_x86_64 -o /tmp/goose && chmod +x /tmp/goose && mv /tmp/goose /usr/local/bin/goose && ls -la /usr/local/bin/goose && sleep 3600"]
+              env:
+              - name: PGPASSWORD
+                value: "${{ env.POSTGRESQL_PASSWORD }}"
+              - name: PGHOST
+                value: "${{ env.POSTGRESQL_HOST }}"
+              - name: PGPORT
+                value: "${{ env.POSTGRESQL_PORT }}"
+              - name: PGDATABASE
+                value: "${{ env.POSTGRESQL_DB }}"
+              - name: PGUSER
+                value: "${{ env.POSTGRESQL_USER }}"
+              - name: PGSCHEMA
+                value: "public"
+              volumeMounts:
+              - name: migrations
+                mountPath: /migrations
+            volumes:
+            - name: migrations
+              configMap:
+                name: db-migrations
+          EOF
+
+      - name: Create migrations ConfigMap
+        run: |
+          kubectl create configmap db-migrations \
+            --from-file=internal/db/migrations/ \
+            -n ${{ inputs.eks_namespace }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Debug secrets (masked)
+        run: |
+          echo "=== Debugging Secrets ==="
+          echo "POSTGRESQL_USER: ${{ env.POSTGRESQL_USER }}"
+          echo "POSTGRESQL_HOST: ${{ env.POSTGRESQL_HOST }}"
+          echo "POSTGRESQL_PORT: ${{ env.POSTGRESQL_PORT }}"
+          echo "POSTGRESQL_DB: ${{ env.POSTGRESQL_DB }}"
+          echo "POSTGRESQL_SCHEMA: public"
+          echo "POSTGRESQL_PASSWORD: [MASKED]"
+
+      - name: Wait for pod to be ready
+        run: |
+          kubectl wait --for=condition=Ready pod/db-migration-pod -n ${{ inputs.eks_namespace }} --timeout=60s
+
+      - name: Test database connection directly
+        run: |
+          echo "=== Testing Database Connection ==="
+          kubectl exec db-migration-pod -n ${{ inputs.eks_namespace }} -- pg_isready -h ${{ env.POSTGRESQL_HOST }} -p ${{ env.POSTGRESQL_PORT }} -U ${{ env.POSTGRESQL_USER }}
+
+      - name: Run migrations
+        run: |
+          echo "=== Current Migration Status ==="
+          STATUS_OUTPUT=$(kubectl exec db-migration-pod -n ${{ inputs.eks_namespace }} -- \
+            /usr/local/bin/goose postgres \
+            "host=${{ env.POSTGRESQL_HOST }} port=${{ env.POSTGRESQL_PORT }} user=${{ env.POSTGRESQL_USER }} password=${{ env.POSTGRESQL_PASSWORD }} dbname=${{ env.POSTGRESQL_DB }} sslmode=require search_path=public" \
+            -dir /migrations status 2>&1)
+          echo "$STATUS_OUTPUT"
+
+          echo "Checking if migrations are needed..."
+          PENDING_MIGRATIONS=$(echo "$STATUS_OUTPUT" | awk '/Pending/ {count++} END {print count+0}')
+          echo "Pending migrations count: $PENDING_MIGRATIONS"
+
+          echo "=== Running Migrations ==="
+          if [ "$PENDING_MIGRATIONS" -gt 0 ]; then
+            echo "Running migrations..."
+            kubectl exec db-migration-pod -n ${{ inputs.eks_namespace }} -- \
+              /usr/local/bin/goose postgres \
+              "host=${{ env.POSTGRESQL_HOST }} port=${{ env.POSTGRESQL_PORT }} user=${{ env.POSTGRESQL_USER }} password=${{ env.POSTGRESQL_PASSWORD }} dbname=${{ env.POSTGRESQL_DB }} sslmode=require search_path=public" \
+              -dir /migrations up
+          else
+            echo "No pending migrations."
+          fi
+
+      - name: Verify migration status
+        run: |
+          echo "=== Final Migration Status ==="
+          kubectl exec db-migration-pod -n ${{ inputs.eks_namespace }} -- /usr/local/bin/goose postgres "host=${{ env.POSTGRESQL_HOST }} port=${{ env.POSTGRESQL_PORT }} user=${{ env.POSTGRESQL_USER }} password=${{ env.POSTGRESQL_PASSWORD }} dbname=${{ env.POSTGRESQL_DB }} sslmode=require search_path=public" -dir /migrations status
+
+      - name: Cleanup migration pod
+        if: always()
+        run: |
+          echo "=== Cleaning up migration pod ==="
+          kubectl delete pod db-migration-pod -n ${{ inputs.eks_namespace }} --ignore-not-found=true
+          kubectl delete configmap db-migrations -n ${{ inputs.eks_namespace }} --ignore-not-found=true
+          kubectl delete configmap goose-config -n ${{ inputs.eks_namespace }} --ignore-not-found=true

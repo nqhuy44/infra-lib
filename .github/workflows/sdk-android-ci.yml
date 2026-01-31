@@ -1,0 +1,167 @@
+name: Reusable SDK for build android package
+
+on:
+  workflow_call:
+    inputs:
+      commit_id:
+        required: true
+        type: string
+      runner_label:
+        required: false
+        type: string
+        default: ubuntu-latest
+      android_ndk_version:
+        description: 'NDK (Android Native Development Kit) Version'
+        required: false
+        type: string
+        default: "r26d"
+      kotlin_bindgen_bin_folder:
+        description: 'Kotlin bindings bin folder'
+        required: false
+        type: string
+        default: "uniffi_bindgen"
+      project:
+        description: 'Project Directory to build android package'
+        required: true
+        type: string
+        default: ""
+      rust_tool_chain:
+        description: 'Rust toolchain version: stable, nightly, beta'
+        required: false
+        type: string
+        default: stable
+      rust_tool_chain_target:
+        description: "Target triple to install for rust toolchain"
+        required: false
+        type: string
+        default: aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android
+      android_abi:
+        description: 'A list of platform for building library'
+        required: false
+        type: string
+        default: '[""]'
+
+jobs:
+  build_android_packages:
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Required Dependencies
+        id: install_required_dependencies
+        run: |
+          apt update -y
+          apt install -y curl build-essential wget unzip apt-transport-https tree
+
+      - name: Install the Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install Cargo NDK
+        id: install_cargo_ndk
+        run: |
+          cargo install --git https://github.com/bbqsrc/cargo-ndk.git --rev 9672f442e3524139f3369720cd8d83c8f29b7303 cargo-ndk
+
+      - name: Setup NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: ${{ inputs.android_ndk_version }}
+          add-to-path: true
+      
+      - name: Set NDK Environment Variable
+        run: echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+      
+      - name: Clean build artifacts
+        run: cargo clean
+      
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ inputs.rust_tool_chain }}
+          target: ${{ inputs.rust_tool_chain_target }}
+      
+      - name: Build Android packages (jniLibs)
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          # Define output dir
+          ANDROID_DIR="$RUNNER_TEMP/android"
+
+          # Get the android_abi (for eg. armeabi-v7a)
+          input_string=$(echo ${{ inputs.android_abi }})
+
+          # Remove brackets and split into an array
+          input_string=${input_string//[\[\]]/}
+          IFS=', ' read -r -a PLATFORM <<< "$input_string"  # Split into array
+
+          targets=$(printf " -t %s" "${PLATFORM[@]}")
+
+          # Build with cargo-ndk for all targets
+          cd ./crates/${{ inputs.project }}
+          cargo ndk \
+            $targets \
+            -o "$ANDROID_DIR/jniLibs" \
+            build --release
+
+          jnilibs_path="$ANDROID_DIR/jniLibs/"
+          echo "jnilibs_path=$jnilibs_path" >> $GITHUB_ENV
+
+      - name: Build Android packages (bindings)
+        run: |
+          # Define output dir
+          ANDROID_DIR="$RUNNER_TEMP/android"
+          # Specify the directory to search file .so
+          directory="$ANDROID_DIR/jniLibs"  
+          file_pattern="lib*.so"
+
+          # Find the file and save its name to a variable
+          file_name=$(find "$directory" -type f -name "$file_pattern" -print -quit)
+          if [ -n "$file_name" ]; then
+            echo "Found file: $file_name"
+          else
+            echo "No .so file found"
+            exit 1
+          fi
+
+          # Generate Kotlin bindings
+          output_bindings="$ANDROID_DIR/bindings" 
+          cargo run --bin ${{ inputs.kotlin_bindgen_bin_folder }} generate \
+            --library "$file_name" \
+            --language kotlin \
+            --out-dir "$output_bindings" \
+            --no-format
+          
+          echo "bindings_path=$output_bindings" >> $GITHUB_ENV
+
+      - name: Upload android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-artifacts
+          path: |
+            ${{ env.jnilibs_path }}
+            ${{ env.bindings_path }}
+
+      - name: Cleanup
+        id: clear_package
+        if: always() # ensures cleanup runs even if previous step fails
+        run: |
+          ANDROID_DIR="$RUNNER_TEMP/android"
+        
+          rm -rf "$ANDROID_DIR"

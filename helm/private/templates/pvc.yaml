@@ -1,0 +1,23 @@
+{{- if .Values.persistentVolumes }}
+{{- range .Values.persistentVolumes }}
+{{- if (not .existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ printf "%s-%s" (include "chart.fullname" $) .name }}
+  {{- with .annotations }}
+  annotations:
+{{ toYaml . | indent 4 }}
+  {{- end }}
+  labels:
+    app: {{ template "chart.fullname" $ }}
+spec:
+  accessModes: {{ .accessModes | default (list "ReadWriteOnce") | toYaml | nindent 2 }}
+  resources:
+    requests:
+      storage: {{ .size | default "1Gi" | quote }}
+  storageClassName: "{{ .storageClass | default "" }}"
+---
+{{- end }}
+{{- end }}
+{{- end }}

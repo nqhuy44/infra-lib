@@ -1,0 +1,226 @@
+name: Reusable Infracost Workflow
+
+on:
+  workflow_call:
+    inputs:
+      runner_label:
+        required: true
+        type: string
+        default: ubuntu-latest
+      aws_region:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      role_to_assume:
+        required: true
+        type: string
+      tf_dir:
+        required: true
+        type: string
+      tf_module_https:
+        required: false
+        type: string
+        default: "true"
+jobs:
+  infracost-pull-request-checks:
+    name: Infracost Pull Request Checks
+    if: github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'reopened')
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Set AWS Account ID
+        id: set_account
+        run: |
+          if [[ "${{ inputs.environment }}" = "prod" ]]; then
+              echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+          else
+              echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+          fi
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::${{ env.ACCOUNT_ID }}:role/${{ inputs.role_to_assume }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Get GitHub secrets from AWS Secrets Manager
+        id: extract
+        run: |
+          secret_json=$(aws secretsmanager get-secret-value --secret-id github-action --query SecretString --output text --region us-east-1)
+
+          echo "GH_TOKEN=$(echo $secret_json | jq -r .GH_TOKEN)" >> $GITHUB_ENV
+          echo "INFRACOST_API_KEY=$(echo $secret_json | jq -r .INFRACOST_API_KEY)" >> $GITHUB_ENV
+
+      - name: Setup Infracost
+        uses: infracost/actions/setup@v3
+        with:
+          api-key: ${{ env.INFRACOST_API_KEY }}
+
+      - name: Checkout base branch
+        uses: actions/checkout@v6
+        with:
+          ref: "${{ github.event.pull_request.base.ref }}"
+          fetch-depth: 0
+          clean: true
+
+      - name: Modify tf_module_https
+        if: ${{ inputs.tf_module_https == 'true' }}
+        working-directory: ${{ inputs.tf_dir }}
+        run: |
+          # in local.tf Update variable github_url_base from ssh to https
+          if [ -f local.tf ]; then
+            cp local.tf _local.tf.bak
+            sed -i 's|git@github.com:|git::https://github.com/|' local.tf
+          fi
+
+      - name: Setup Git credentials for modules
+        if: ${{ inputs.tf_module_https == 'true' }}
+        run: |
+          echo "::add-mask::${{ env.GH_TOKEN }}"
+          git config --global url."https://x-access-token:${{ env.GH_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Tofu init base branch
+        working-directory: ${{ inputs.tf_dir }}
+        run: tofu init -input=false -upgrade
+
+      - name: Generate Infracost cost estimate baseline
+        working-directory: ${{ inputs.tf_dir }}
+        run: |
+          infracost breakdown --path=. \
+                              --format=json \
+                              --out-file=/tmp/infracost-base.json
+
+      - name: Checkout PR branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          clean: true
+
+      - name: Modify tf_module_https for PR branch
+        if: ${{ inputs.tf_module_https == 'true' }}
+        working-directory: ${{ inputs.tf_dir }}
+        run: |
+          # in local.tf Update variable github_url_base from ssh to https
+          if [ -f local.tf ]; then
+            cp local.tf _local.tf.bak
+            sed -i 's|git@github.com:|git::https://github.com/|' local.tf
+          fi
+
+      - name: Tofu init PR branch
+        working-directory: ${{ inputs.tf_dir }}
+        run: tofu init -input=false -upgrade
+
+      - name: Generate Infracost diff
+        working-directory: ${{ inputs.tf_dir }}
+        run: |
+          infracost diff --path=. \
+                          --format=json \
+                          --compare-to=/tmp/infracost-base.json \
+                          --out-file=/tmp/infracost.json
+
+      - name: Post Infracost comment
+        working-directory: ${{ inputs.tf_dir }}
+        run: |
+          infracost comment github --path=/tmp/infracost.json \
+                                   --repo=$GITHUB_REPOSITORY \
+                                   --github-token=${{ env.GH_TOKEN }} \
+                                   --pull-request=${{ github.event.pull_request.number }} \
+                                   --behavior=update
+
+  # infracost-default-branch-update:
+  #     name: Infracost Default Branch Update
+  #     if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master')
+  #     runs-on: ${{ inputs.runner_label }}
+  #     permissions:
+  #         id-token: write
+  #         contents: read
+  #         pull-requests: write
+  #     steps:
+  #         - name: Set AWS Account ID
+  #           id: set_account
+  #           run: |
+  #             if [[ "${{ inputs.environment }}" = "prod" ]]; then
+  #                 echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+  #             else
+  #                 echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+  #             fi
+
+  #         - name: Configure AWS credentials with OIDC
+  #           uses: aws-actions/configure-aws-credentials@v5
+  #           with:
+  #             role-to-assume: ${{ inputs.role_to_assume }}
+  #             aws-region: ${{ inputs.aws_region }}
+
+  #         - name: Get GitHub secrets from AWS Secrets Manager
+  #           id: extract
+  #           run: |
+  #             secret_json=$(aws secretsmanager get-secret-value --secret-id ${{ inputs.gh_secret_id }} --query SecretString --output text --region us-east-1)
+
+  #             echo "INFRACOST_API_KEY=$(echo $secret_json | jq -r .INFRACOST_API_KEY)" >> $GITHUB_ENV
+
+  #         - name: Setup Infracost
+  #           uses: infracost/actions/setup@v3
+  #           with:
+  #               api-key: ${{ env.INFRACOST_API_KEY }}
+
+  #         - name: Checkout default branch
+  #           uses: actions/checkout@v6
+
+  #         - name: Run Infracost on default branch and update Infracost Cloud
+  #           run: |
+  #               infracost breakdown --path=. \
+  #                                   --format=json \
+  #                                   --out-file=infracost.json
+
+  #               infracost upload --path=infracost.json || echo "Always pass main branch runs even if there are policy failures"
+
+  # infracost-pull-request-status-update:
+  #     name: Infracost PR Status Update
+  #     if: github.event_name == 'pull_request' && github.event.action == 'closed'
+  #     runs-on: ${{ inputs.runner_label }}
+  #     permissions:
+  #         id-token: write
+  #         contents: read
+  #         pull-requests: write
+  #     steps:
+  #         - name: Set AWS Account ID
+  #           id: set_account
+  #           run: |
+  #             if [[ "${{ inputs.environment }}" = "prod" ]]; then
+  #                 echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+  #             else
+  #                 echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+  #             fi
+
+  #         - name: Configure AWS credentials with OIDC
+  #           uses: aws-actions/configure-aws-credentials@v5
+  #           with:
+  #             role-to-assume: ${{ inputs.role_to_assume }}
+  #             aws-region: ${{ inputs.aws_region }}
+
+  #         - name: Get GitHub secrets from AWS Secrets Manager
+  #           id: extract
+  #           run: |
+  #             secret_json=$(aws secretsmanager get-secret-value --secret-id ${{ inputs.gh_secret_id }} --query SecretString --output text --region us-east-1)
+
+  #             echo "INFRACOST_API_KEY=$(echo $secret_json | jq -r .INFRACOST_API_KEY)" >> $GITHUB_ENV
+
+  #         - name: Update PR status in Infracost Cloud
+  #           run: |
+  #               PR_STATUS="MERGED"
+  #               if [[ ${{ github.event.pull_request.merged }} = false ]]; then PR_STATUS="CLOSED"; fi
+
+  #               echo "Updating status of ${{ github.event.pull_request.html_url }} to $PR_STATUS"
+  #               curl -i \
+  #                 --request POST \
+  #                 --header "Content-Type: application/json" \
+  #                 --header "X-API-Key: $INFRACOST_API_KEY" \
+  #                 --data "{ \"query\": \"mutation {updatePullRequestStatus( url: \\\"${{ github.event.pull_request.html_url }}\\\", status: $PR_STATUS )}\" }" \
+  #                 "https://dashboard.api.infracost.io/graphql";
+  #           env:
+  #               INFRACOST_API_KEY: ${{ env.INFRACOST_API_KEY }}

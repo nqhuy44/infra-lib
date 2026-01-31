@@ -1,0 +1,98 @@
+name: Reusable SonarQube
+
+on:
+  workflow_call:
+    inputs:
+      commit_id:
+        required: true
+        type: string
+      runner_label:
+        required: false
+        type: string
+        default: k8s
+      sonar_scan_dir:
+        required: false
+        type: string
+        default: .
+      environment:
+        required: true
+        type: string
+        default: ""
+      sonar_secret_id:
+        required: true
+        type: string
+        default: ""
+      aws_region:
+        required: false
+        type: string
+        default: "ap-southeast-1"
+
+jobs:
+  code_coverage:
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Config the AWS Account ID based on the environmnet
+        run: |
+          ENVIRONMENT=${{ inputs.environment }}
+
+          case "$ENVIRONMENT" in
+              nonprod)
+                  echo "AWS_ACCOUNT_ID=123456789" >> $GITHUB_ENV
+                  ;;
+              prod)
+                  echo "AWS_ACCOUNT_ID=123456789" >> $GITHUB_ENV
+                  ;;
+              *)
+                  echo "Unknown environment: $ENVIRONMENT"
+                  exit 1
+                  ;;
+          esac
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v5.1.1
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/global-github-actions-role
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Get Sonar secrets from AWS Secrets Manager
+        run: |
+          secret_json=$(aws secretsmanager get-secret-value --secret-id ${{inputs.sonar_secret_id}} --query SecretString --output text --region ${{ inputs.aws_region }})
+
+          # Extracting the values
+          sonar_token=$(echo $secret_json | jq -r .SONAR_TOKEN)
+          sonar_host_url=$(echo $secret_json | jq -r .SONAR_HOST_URL)
+
+          # Mask the sensitive values
+          echo "::add-mask::$sonar_token"
+          echo "::add-mask::$sonar_host_url"
+
+          # Save to GitHub environment
+          echo "SONAR_TOKEN=$sonar_token" >> $GITHUB_ENV
+          echo "SONAR_HOST_URL=$sonar_host_url" >> $GITHUB_ENV
+
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+        with:
+          projectBaseDir: ${{ inputs.sonar_scan_dir }}
+        continue-on-error: true
+
+      - name: SonarQube Quality Gate check
+        uses: SonarSource/sonarqube-quality-gate-action@v1.2.0
+        env:
+          SONAR_TOKEN: ${{ env.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ env.SONAR_HOST_URL }}
+        with:
+          scanMetadataReportFile: ${{ inputs.sonar_scan_dir }}/.scannerwork/report-task.txt
+        continue-on-error: true

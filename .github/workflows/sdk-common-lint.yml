@@ -1,0 +1,47 @@
+name: Reusable SDK Lint and Format and Test
+
+on:
+  workflow_call:
+    inputs:
+      commit_id:
+        required: true
+        type: string
+      runner_label:
+        required: false
+        type: string
+        default: ubuntu-latest
+
+jobs:
+  lint_and_format_and_test:
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run fmt check
+        id: cargo_fmt_check
+        run: |
+          cargo fmt --all -- --check
+
+      - name: Run Clippy check
+        id: cargo_clippy_check
+        run: |
+          cargo clippy --all-features -- -D warnings
+
+      - name: Run tests
+        run: |
+          cargo test --workspace --exclude uq-edr

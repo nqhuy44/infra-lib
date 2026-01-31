@@ -1,0 +1,82 @@
+name: Import Detection rules on Kibana
+
+on:
+  workflow_call:
+    inputs:
+      aws_region:
+        required: true
+        type: string
+      kibana_endpoint:
+        required: true
+        type: string
+      rules_path:
+        required: false
+        type: string
+        default: "./detection-rules/"
+      runner_label:
+        required: false
+        type: string
+        default: k8s
+      secret_id:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      context:
+        required: true
+        type: string
+jobs:
+  import-rules:
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set AWS Account ID
+        id: set_account
+        run: |
+          if [ "${{ inputs.environment }}" = "prod" ]; then
+              echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+          else
+              echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+          fi
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v5.1.1
+        with:
+          role-to-assume: arn:aws:iam::${{ env.ACCOUNT_ID }}:role/global-github-actions-role
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Get Kibana api key from AWS Secrets Manager
+        id: get_kibana_api_key
+        run: |
+          SECRET_VALUE=$(aws secretsmanager get-secret-value \
+          --secret-id "${{ inputs.secret_id }}" \
+          --query SecretString \
+          --output text \
+          --region ${{ inputs.aws_region }})
+
+          # Save to GitHub env (masked values will appear as *** in logs)
+          echo "API_KEY=$SECRET_VALUE" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: |
+          pip install -r ${{ inputs.context }}/requirements.txt
+
+      - name: Import detection rules to Kibana
+        run: |
+          cd "${{ inputs.context }}"
+          for file in $(find "${{ inputs.rules_path }}" -type f \( -name "*.toml" -o -name "*.json" -o -name "*.yml" -o -name "*.yaml" \)); do
+              echo "Importing rule: $file"
+              python -m detection_rules kibana --api-key "${{ env.API_KEY }}" --kibana-url "${{ inputs.kibana_endpoint }}" import-rules -f "$file" -o
+          done

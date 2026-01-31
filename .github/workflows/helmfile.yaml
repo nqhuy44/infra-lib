@@ -1,0 +1,137 @@
+name: Reusable Helmfile Workflow
+
+on:
+  workflow_call:
+    inputs:
+      runner_label:
+        required: true
+        type: string
+        default: ubuntu-latest
+      aws_region:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      gh_secret_id:
+        required: false
+        type: string
+        default: github/credentials/github.com/uneycom
+      gh_secret_key:
+        required: false
+        type: string
+        default: github_token
+      helmfile_dir:
+        required: true
+        type: string
+      helmfile_selector:
+        required: false
+        type: string
+      helmfile_file:
+        required: true
+        type: string
+        default: "helmfile.yaml"
+      eks_cluster_name:
+        required: true
+        type: string
+      role_to_assume:
+        required: true
+        type: string
+jobs:
+  helmfile-diff:
+    if: github.event_name == 'pull_request'
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set AWS Account ID
+        id: set_account
+        run: |
+          if [[ "${{ inputs.environment }}" = "prod" ]]; then
+            echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+          else
+            echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+          fi
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::${{ env.ACCOUNT_ID }}:role/${{ inputs.role_to_assume }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Configure kubectl for EKS
+        run: |
+          aws eks update-kubeconfig --name ${{ inputs.eks_cluster_name }} --region ${{ inputs.aws_region }}
+
+      - name: Run helmfile diff
+        id: helmfile_diff
+        working-directory: ${{ inputs.helmfile_dir }}
+        continue-on-error: true
+        run: |
+          if [ -n "${{ inputs.helmfile_selector }}" ]; then
+            helmfile -f helmfile.yaml.gotmpl -l name=${{ inputs.helmfile_selector }} diff > /tmp/helmfile-diff-nonprod.txt 2>&1 || true
+          else
+            helmfile -f helmfile.yaml.gotmpl diff > /tmp/helmfile-diff-nonprod.txt 2>&1 || true
+          fi
+          echo "diff_output<<EOF" >> $GITHUB_OUTPUT
+          head -c 65000 /tmp/helmfile-diff-nonprod.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Comment Helmfile Diff Report on PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: Helmfile Diff Report
+          message: |
+            ```
+            ${{ steps.helmfile_diff.outputs.diff_output }}
+            ```
+
+  helmfile-apply:
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/develop')
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set AWS Account ID
+        id: set_account
+        run: |
+          if [[ "${{ inputs.environment }}" = "prod" ]]; then
+            echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+          else
+            echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+          fi
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::${{ env.ACCOUNT_ID }}:role/${{ inputs.role_to_assume }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Configure kubectl for EKS
+        run: |
+          aws eks update-kubeconfig --name ${{ inputs.eks_cluster_name }} --region ${{ inputs.aws_region }}
+
+      - name: Run helmfile apply
+        working-directory: ${{ inputs.helmfile_dir }}
+        run: |
+          if [ -n "${{ inputs.helmfile_selector }}" ]; then
+            helmfile -f ${{ inputs.helmfile_file }} -l name=${{ inputs.helmfile_selector }} apply
+          else
+            helmfile -f ${{ inputs.helmfile_file }} apply
+          fi

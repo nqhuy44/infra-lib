@@ -1,0 +1,449 @@
+name: Reusable SDK for syncing apple package
+
+on:
+  workflow_call:
+    inputs:
+      commit_id:
+        required: true
+        type: string
+      runner_label:
+        required: false
+        type: string
+        default: macos-latest
+      project:
+        description: "Project Directory to build Apple package"
+        required: true
+        type: string
+        default: ""
+      package_name:
+        description: "Package name for Apple Swift"
+        required: true
+        type: string
+        default: ""
+      platform:
+        description: "Built Platform for Apple: macos, ios, tvos, watchos, visionos"
+        required: true
+        type: string
+      aws_region:
+        required: false
+        type: string
+        default: "ap-southeast-1"
+      target_repo:
+        required: true
+        type: string # Format: org/repo
+      target_branch:
+        required: false
+        type: string
+        default: develop
+      auto_approve:
+        description: "Automatically approve and merge the PR (true/false)"
+        required: true
+        type: boolean
+        default: true
+      version_tag:
+        description: "String indicating the tag version (Eg. v0.1.0)"
+        required: true
+        type: string
+        default: ""
+      version_title:
+        description: "String indicating the release version (Eg. v0.1.0)"
+        required: true
+        type: string
+        default: ""
+
+jobs:
+  build_and_sync_apple_packages:
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write # Required to create and manage pull requests
+
+    steps:
+      ############## Setup Logging
+      - name: Setup logging
+        run: |
+          mkdir -p "$RUNNER_TEMP/logger" 
+          cat << 'EOF' > "$RUNNER_TEMP/logger/logger.sh" 
+          #!/bin/bash
+
+          LOG_LEVEL="DEBUG"           # Set to your desired log level
+
+          log() {
+            local level="$1"
+            local message="$2"
+            local timestamp=$(date +'%Y-%m-%d %H:%M:%S')
+
+            case "$level" in
+              "DEBUG")
+                if [ "$LOG_LEVEL" = "DEBUG" ]; then
+                  echo "$timestamp [$level] $message"
+                fi
+                ;;
+              "INFO"|"WARNING"|"ERROR")
+                echo "$timestamp [$level] $message"
+                ;;
+              *)
+                echo "$timestamp [UNKNOWN] $message"
+                ;;
+            esac
+          }
+          EOF
+
+          # Make the script executable
+          chmod +x "$RUNNER_TEMP/logger/logger.sh"
+
+      # Prepare job to set up environment variables and credentials
+      - name: Get variables
+        id: vars
+        run: |
+          short_commit=$(echo '${{ inputs.commit_id }}' | cut -c1-7)
+          target_branch='${{ inputs.target_branch }}'
+          echo "SHORT_COMMIT=$short_commit" >> $GITHUB_ENV
+          echo "SOURCE_BRANCH=feature/SDK-000-ci-${{ inputs.project }}-$short_commit" >> $GITHUB_ENV
+          echo "TARGET_BRANCH=$target_branch" >> $GITHUB_ENV
+
+      ############## Build the artifact
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Rust toolchain
+        id: install_rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+
+      - name: Install cargo-swift
+        id: install_cargo_swift
+        run: |
+          cargo install cargo-swift --version 0.9.0 --locked
+
+      - name: Check Platform Input
+        run: |
+          # Source the logger script to use the log function
+          source "$RUNNER_TEMP/logger/logger.sh"
+
+          # Function to validate platform input
+          is_valid_platform() {
+              local input="$1"
+              # Regular expression to match valid platform input
+              if [[ $input =~ ^(macos|ios|tvos|watchos|visionos)(\ (macos|ios|tvos|watchos|visionos))*$ ]]; then
+                  return 0  # Valid input
+              else
+                  return 1  # Invalid input
+              fi
+          }
+
+          # Get the platform input from GitHub Actions
+          platform_input="${{ inputs.platform }}"
+
+          # Validate the input
+          if is_valid_platform "$platform_input"; then
+              log INFO "Valid input"
+          else
+              log ERROR "Invalid input apple platform. Please use spaces, not commas."
+              exit 1  
+          fi
+
+      - name: Build Apple static libs
+        id: build_apple_static_libs
+        run: |
+          cd crates/${{ inputs.project }}
+          cargo swift package -n ${{ inputs.package_name }} -p ${{ inputs.platform }} -r --lib-type static -y
+
+          TEMP_APPLE_PACKAGE_PATH=$(pwd)/${{ inputs.package_name }}
+          APPLE_PACKAGE_PATH="$RUNNER_TEMP/apple"
+          APPLE_RUSTFRAMEWORK_PACKAGE_PATH="$RUNNER_TEMP/RustFramework.xcframework"
+          # Ensure the destination directory exists
+          mkdir -p "$APPLE_PACKAGE_PATH"
+          mkdir -p "$APPLE_RUSTFRAMEWORK_PACKAGE_PATH"
+
+          # Copy files from TEMP_APPLE_PACKAGE_PATH to APPLE_PACKAGE_PATH
+          cp -r "$TEMP_APPLE_PACKAGE_PATH/"* "$APPLE_PACKAGE_PATH/"
+
+          # Copy files from RustFramework.xcframework APPLE_PACKAGE_PATH to APPLE_RUSTFRAMEWORK_PACKAGE_PATH
+          cp -r "$TEMP_APPLE_PACKAGE_PATH/RustFramework.xcframework/"* "$APPLE_RUSTFRAMEWORK_PACKAGE_PATH/"
+
+          CURRENT_DIRRECTORY=$(pwd)
+
+          cd "$APPLE_RUSTFRAMEWORK_PACKAGE_PATH"
+          cd ..
+          pwd
+          ls
+          zip -r RustFramework.xcframework.zip RustFramework.xcframework/
+          CHECKSUM=$(swift package compute-checksum RustFramework.xcframework.zip)
+          mv RustFramework.xcframework.zip "$APPLE_RUSTFRAMEWORK_PACKAGE_PATH/"
+
+          echo "APPLE_PACKAGE_PATH=$APPLE_PACKAGE_PATH" >> $GITHUB_ENV
+          echo "APPLE_RUSTFRAMEWORK_PACKAGE_PATH=$APPLE_RUSTFRAMEWORK_PACKAGE_PATH" >> $GITHUB_ENV
+          echo "CHECKSUM=$CHECKSUM" >> $GITHUB_ENV
+
+          # Build docs
+          cd "$CURRENT_DIRRECTORY"
+          cargo doc --no-deps
+
+          # Copy doc
+          cd ../../target
+
+          TEMP_APPLE_PACKAGE_DOCS_PATH=$(pwd)/doc
+          APPLE_PACKAGE_DOCS_PATH="$RUNNER_TEMP/doc"
+
+          mkdir -p "$APPLE_PACKAGE_DOCS_PATH"
+          cp -r "$TEMP_APPLE_PACKAGE_DOCS_PATH/"* "$APPLE_PACKAGE_DOCS_PATH/"
+
+          echo "APPLE_PACKAGE_DOCS_PATH=$APPLE_PACKAGE_DOCS_PATH" >> $GITHUB_ENV
+      ############## Syncing the target Repo
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v5.1.1
+        with:
+          role-to-assume: arn:aws:iam::123456789:role/global-github-actions-role
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Get GitHub secrets from AWS Secrets Manager
+        id: extract
+        run: |
+          secret_json=$(aws secretsmanager get-secret-value --secret-id github-action --query SecretString --output text --region us-east-1)
+
+          echo "GH_TOKEN=$(echo $secret_json | jq -r .GH_TOKEN)" >> $GITHUB_ENV
+          echo "GH_ID=$(echo $secret_json | jq -r .GH_ID)" >> $GITHUB_ENV
+          echo "APPROVED_GH_TOKEN=$(echo $secret_json | jq -r .APPROVED_GH_TOKEN)" >> $GITHUB_ENV
+          echo "APPROVED_GH_ID=$(echo $secret_json | jq -r .APPROVED_GH_ID)" >> $GITHUB_ENV
+
+      ### If the Target Repository is empty, perform setup
+      - name: Check if the repository is empty
+        id: repo_empty_check
+        run: |
+          # Source the logger script to use the log function
+          source "$RUNNER_TEMP/logger/logger.sh"
+
+          response=$(curl -s \
+            -u ${{ env.GH_ID }}:${{ env.GH_TOKEN }} \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ inputs.target_repo }}/contents \
+          )
+
+          if echo "$response" | grep -q '"status": "404"'; then
+              log ERROR "Target repository is empty"
+              log ERROR "Target repository must have  `develop` as main branch"
+              exit 1
+          fi
+
+      ### Update the Target Repo and create PR
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.target_repo }}
+          ref: ${{ env.TARGET_BRANCH }} # target base branch
+          token: ${{ env.GH_TOKEN }} # Use the token from the prepare job
+
+      - name: Set up Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create new branch and update values
+        id: update_values
+        run: |
+          # Source the logger script to use the log function
+          source "$RUNNER_TEMP/logger/logger.sh"
+
+          git checkout -b ${{ env.SOURCE_BRANCH }}
+
+          log INFO "Updating swift packages"
+
+          # remove all files and directories in the current directory while keeping the .git folder
+          rm -f Package.swift
+          rm -rf RustFramework.xcframework
+          rm -rf Sources
+          rm -rf docs
+
+          mkdir docs
+
+          # Copy the built artifact to the current directory
+          cp -r "${{ env.APPLE_PACKAGE_PATH }}/"* .
+
+          cp -r "${{ env.APPLE_PACKAGE_DOCS_PATH }}/"* docs/
+
+          # Remove large file 
+          rm -rf RustFramework.xcframework
+
+          git add .
+          # Add and commit changes
+          if git diff-index --quiet HEAD --; then
+              log ERROR "No changes in the package detected."
+              exit 1
+          else
+              log INFO "There are changes in the package."
+              log INFO "Committing changes to ${{ env.SOURCE_BRANCH }}"
+              git commit -m "SDK-000: Updating swift packages for ${{ inputs.project }}"
+              log INFO "Pushing changes to ${{ env.SOURCE_BRANCH }}"
+              git push origin ${{ env.SOURCE_BRANCH }}
+              log INFO "Pushed changes to ${{ env.SOURCE_BRANCH }}"
+          fi
+
+      - name: Create PR
+        id: create_pr
+        run: |
+          # Source the logger script to use the log function
+          source "$RUNNER_TEMP/logger/logger.sh"
+
+          pr_title="SDK-000: CI - ${{ inputs.project }} - Auto-generated PR"
+          pr_body="This PR was automatically generated by the CI workflow to update the Swift package"
+          head="${{ env.SOURCE_BRANCH }}"
+          base="${{ env.TARGET_BRANCH }}"
+          cat > pr_payload.json <<EOF
+          {
+            "title": "$pr_title",
+            "body": "$pr_body",
+            "head": "${{ env.SOURCE_BRANCH }}",
+            "base": "${{ env.TARGET_BRANCH }}"
+          }
+          EOF
+
+          response=$(curl -s -X POST \
+            -u ${{ env.GH_ID }}:${{ env.GH_TOKEN }} \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ inputs.target_repo }}/pulls \
+            -d @pr_payload.json
+          )
+          echo "PR_NUMBER=$(echo ${response} | jq -r .number)" >> $GITHUB_ENV
+          echo "PR_URL=$(echo ${response} | jq -r .html_url)" >> $GITHUB_ENV
+          log INFO "Created PR: ${{ env.PR_URL }}"
+
+      - name: Add Label
+        run: |
+          curl -s -X POST \
+            -u ${{ env.GH_ID }}:${{ env.GH_TOKEN }} \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ inputs.target_repo }}/issues/${{ env.PR_NUMBER }}/labels \
+            -d '{"labels":["sdk","auto-update"]}'
+
+      - name: Approve PR
+        if: ${{ inputs.auto_approve == true }}
+        run: |
+          curl -s -X POST \
+            -u ${{ env.APPROVED_GH_ID }}:${{ env.APPROVED_GH_TOKEN }} \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ inputs.target_repo }}/pulls/${{ env.PR_NUMBER }}/reviews \
+            -d '{"event":"APPROVE"}'
+
+      - name: Merge PR
+        if: ${{ inputs.auto_approve == true }}
+        run: |
+          curl -s -X PUT \
+            -u ${{ env.GH_ID }}:${{ env.GH_TOKEN }} \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ inputs.target_repo }}/pulls/${{ env.PR_NUMBER }}/merge \
+            -d '{"commit_title": "${{ inputs.pr_title }}", "merge_method": "squash"}'
+
+      - name: Draft the release
+        run: |
+          # Source the logger script to use the log function
+          source "$RUNNER_TEMP/logger/logger.sh"
+
+          git checkout ${{ env.TARGET_BRANCH }}
+          git pull
+
+          cp "$APPLE_RUSTFRAMEWORK_PACKAGE_PATH/RustFramework.xcframework.zip" .
+
+          # export GH_TOKEN=${{ env.GH_TOKEN }}
+          gh release create ${{ env.TARGET_BRANCH }} 'RustFramework.xcframework.zip#RustFramework.xcframework.zip' --draft --generate-notes --title ${{ inputs.version_title }}
+          # Fetch the URL and assign it to the variable
+          URL=$(gh release view feature/SDK-367-develop --json assets | jq -r '.assets[] | .apiUrl + ".zip"')
+
+          RELEASE_SOURCE_BRANCH=feature/SDK-000-release-${{ inputs.project }}-${{ env.SHORT_COMMIT }}
+
+          git checkout -b $RELEASE_SOURCE_BRANCH
+
+          sed -i.bak "s|\.binaryTarget(name: \"RustFramework\", path: \"./RustFramework\.xcframework\"),|.binaryTarget(name: \"RustFramework\", url: \"$URL\", checksum: \"${{ env.CHECKSUM }}\"),|" Package.swift
+
+          git add Package.swift
+          git commit -m "SDK-000: Updating checksum, url for the release package"
+          git push origin $RELEASE_SOURCE_BRANCH
+
+          pr_title="SDK-000: Release - ${{ inputs.project }} - Auto-generated PR"
+          pr_body="This PR was automatically generated by the CI workflow to release the Swift package"
+          head="$RELEASE_SOURCE_BRANCH"
+          base="${{ env.TARGET_BRANCH }}"
+          cat > pr_payload.json <<EOF
+          {
+            "title": "$pr_title",
+            "body": "$pr_body",
+            "head": "$head",
+            "base": "$base"
+          }
+          EOF
+
+          new_response=$(curl -s -X POST \
+            -u ${{ env.GH_ID }}:${{ env.GH_TOKEN }} \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ inputs.target_repo }}/pulls \
+            -d @pr_payload.json
+          )
+
+          echo "Response: ${new_response}"
+
+          echo "NEW_PR_NUMBER=$(echo ${new_response} | jq -r .number)" >> $GITHUB_ENV
+          echo "NEW_PR_URL=$(echo ${new_response} | jq -r .html_url)" >> $GITHUB_ENV
+
+      - name: Release Version
+        run: |
+          # Source the logger script to use the log function
+          source "$RUNNER_TEMP/logger/logger.sh"
+
+          log INFO "PR Number: ${{ env.NEW_PR_NUMBER }}"
+          log INFO "Created PR: ${{ env.NEW_PR_URL }}"
+
+          # Wait for 10 seconds
+          sleep 10
+
+          # Continue with the rest of your script
+          log INFO "Waited for 10 seconds."
+
+          curl -s -X POST \
+            -u ${{ env.GH_ID }}:${{ env.GH_TOKEN }} \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ inputs.target_repo }}/issues/${{ env.NEW_PR_NUMBER }}/labels \
+            -d '{"labels":["sdk","auto-update"]}'
+
+          # Wait for 10 seconds
+          sleep 10
+
+          # Continue with the rest of your script
+          log INFO "Waited for 10 seconds."
+
+          curl -s -X POST \
+            -u ${{ env.APPROVED_GH_ID }}:${{ env.APPROVED_GH_TOKEN }} \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ inputs.target_repo }}/pulls/${{ env.NEW_PR_NUMBER }}/reviews \
+            -d '{"event":"APPROVE"}'
+
+          # Wait for 10 seconds
+          sleep 10
+
+          log INFO "Waited for 10 seconds."
+
+          curl -s -X PUT \
+            -u ${{ env.GH_ID }}:${{ env.GH_TOKEN }} \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ inputs.target_repo }}/pulls/${{ env.NEW_PR_NUMBER }}/merge \
+            -d '{"commit_title": "SDK-000: Update URL, checksum", "merge_method": "squash"}'
+
+          # Push the tag
+          git tag -a ${{ inputs.version_tag }} -m "Release version ${{ inputs.version_tag }}: ${{ inputs.version_title }}"
+          git push origin ${{ inputs.version_tag }}
+
+          sleep 10
+          log INFO "Waited for 10 seconds."
+
+          # Edit the release and then publish
+          gh release edit ${{ env.TARGET_BRANCH }} --tag=${{ inputs.version_tag }}
+
+          sleep 10
+          log INFO "Waited for 10 seconds."
+          gh release edit ${{ inputs.version_tag }} --draft=false

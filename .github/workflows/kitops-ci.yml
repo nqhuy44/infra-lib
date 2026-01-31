@@ -1,0 +1,293 @@
+name: KitOps CI Workflow
+
+on:
+  workflow_call:
+    inputs:
+      aws_region:
+        required: true
+        type: string
+      ecr_registry:
+        required: true
+        type: string
+      model_registry:
+        required: true
+        type: string
+        description: "ECR registry for kitops model (can be different account/region)"
+      service_name:
+        required: true
+        type: string
+      model_repo:
+        required: true
+        type: string
+        description: "ECR repository for kitops model"
+      model_tag:
+        required: false
+        type: string
+        default: "latest"
+        description: "Tag for kitops model in ECR"
+      dockerfile_path:
+        required: false
+        type: string
+        default: Dockerfile
+      context:
+        required: false
+        type: string
+        default: .
+      commit_id:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      env_type:
+        required: false
+        type: string
+        default: runtime
+        description: "runtime or buildtime"
+      runner_label:
+        required: false
+        type: string
+        default: ubuntu-latest
+      skip_dir:
+        required: false
+        type: string
+        default: ""
+      secret_id:
+        required: false
+        type: string
+        default: ""
+      ecr_name:
+        required: false
+        type: string
+        default: ""
+      docker_push:
+        required: false
+        type: boolean
+        default: true
+      model_context:
+        required: false
+        type: string
+        default: ""
+  workflow_dispatch:
+    inputs:
+      model_tag:
+        description: "Tag of the KitOps model image to pull"
+        required: true
+        type: string
+
+jobs:
+  build_trivy_push:
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Resolve parameters (dispatch vs call)
+        id: resolve
+        run: |
+          # Resolve model tag from dispatch or workflow_call inputs
+          if [ -n "${{ github.event.inputs.model_tag }}" ]; then
+            echo "MODEL_TAG=${{ github.event.inputs.model_tag }}" >> $GITHUB_ENV
+          else
+            echo "MODEL_TAG=${{ inputs.model_tag }}" >> $GITHUB_ENV
+          fi
+
+          # Commit id: default to current sha if not provided
+          if [ -n "${{ inputs.commit_id }}" ]; then
+            echo "COMMIT_ID=${{ inputs.commit_id }}" >> $GITHUB_ENV
+          else
+            echo "COMMIT_ID=${{ github.sha }}" >> $GITHUB_ENV
+          fi
+
+      - name: Checkout source
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set AWS Account ID
+        id: set_account
+        run: |
+          if [[ "${{ inputs.environment }}" = "prod" && "${{ inputs.env_type }}" = "buildtime" ]]; then
+            echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+          else
+            echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+          fi
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v5.1.1
+        with:
+          role-to-assume: arn:aws:iam::${{ env.ACCOUNT_ID }}:role/global-github-actions-role
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: install kit
+        uses: kitops-ml/gh-kit-setup@v1.0.0
+        with:
+          version: v1.8.0
+
+      - name: Pull and Unpack KitOps Model
+        shell: bash
+        run: |
+          # Use aws_region for kitops model
+          set -x
+          kit version
+          # Login to ECR for kitops model using aws_region
+          aws ecr get-login-password --region ${{ inputs.aws_region }} \
+            | kit login --username AWS --password-stdin ${{ inputs.model_registry }}
+
+          # Pull kitops model from ECR
+          MODEL_IMAGE="${{ inputs.model_registry }}/${{ inputs.model_repo }}:${MODEL_TAG}"
+          echo "Pulling kitops model: $MODEL_IMAGE"
+          kit pull $MODEL_IMAGE
+
+          # Unpack the model using kit
+          echo "Unpacking kitops model..."
+          cd ${{ inputs.context }}
+          kit unpack $MODEL_IMAGE --filter=model
+          pwd
+          ls -la
+
+          echo "KitOps model unpacked successfully"
+
+      - name: Get Build-time Secrets from AWS Secrets Manager
+        id: get_build_secrets # Assign an ID to reference outputs
+        if: inputs.env_type == 'buildtime'
+        run: |
+          # Fetch the secret value
+          if [ -n "${{ inputs.secret_id }}" ]; then
+            SECRET_VALUE=$(aws secretsmanager get-secret-value \
+              --secret-id "${{ inputs.secret_id }}" \
+              --query SecretString \
+              --output text \
+              --region ${{ inputs.aws_region }})
+          else
+            SECRET_VALUE=$(aws secretsmanager get-secret-value \
+              --secret-id ${{ inputs.environment }}/${{ inputs.service_name }}/secrets \
+              --query SecretString \
+              --output text \
+              --region ${{ inputs.aws_region }})
+          fi
+
+          build_args=""
+          if echo "$SECRET_VALUE" | jq -e 'map_values(type == "string")' > /dev/null; then
+            # Mask each secret value in logs
+            for val in $(echo "$SECRET_VALUE" | jq -r 'to_entries[] | .value'); do
+              echo "::add-mask::$val"
+            done
+            
+            # Build args from JSON
+            build_args=$(echo "$SECRET_VALUE" | jq -r 'to_entries | map("--build-arg \(.key)=\(.value)") | join(" ")')
+          else
+            echo "Warning: Secrets Manager secret is not a flat JSON object."
+            build_args="--build-arg SECRET_FROM_SM='$SECRET_VALUE'"
+            echo "::add-mask::$SECRET_VALUE"
+          fi
+
+          # Save to GitHub env (masked values will appear as *** in logs)
+          echo "BUILD_ARGS=$build_args" >> "$GITHUB_ENV"
+
+      - name: Merge Extra Build Args (JSON input)
+        id: merge_extra_args
+        if: inputs.env_type == 'buildtime' && inputs.extra_build_args != '{}'
+        run: |
+          extra_json='${{ inputs.extra_build_args }}'
+
+          # Validate JSON format
+          if ! echo "$extra_json" | jq empty 2>/dev/null; then
+            echo "Invalid JSON format for extra_build_args"
+            exit 1
+          fi
+
+          # Convert JSON to Docker build args
+          extra_args=$(echo "$extra_json" | jq -r 'to_entries | map("--build-arg \(.key)=\(.value)") | join(" ")')
+
+          # Merge with any previous BUILD_ARGS
+          echo "BUILD_ARGS=${BUILD_ARGS:-} $extra_args" >> "$GITHUB_ENV"
+
+      - name: Prepare image metadata
+        env:
+          MODEL_CONTEXT: ${{ inputs.model_context }}
+        run: |
+          short_commit=$(echo "$COMMIT_ID" | cut -c1-7)
+          image_tag="v${short_commit}-${{ inputs.environment }}"
+          echo "image_tag=$image_tag" >> $GITHUB_ENV
+          echo "🔧 Building image with tag: $image_tag"
+
+          if [ -n "${{ inputs.ecr_name }}" ]; then
+            ECR_URI=${{ inputs.ecr_registry }}/${{ inputs.ecr_name }}
+          else
+            ECR_URI=${{ inputs.ecr_registry }}/${{ inputs.service_name }}
+          fi
+          echo "ECR_URI=$ECR_URI" >> $GITHUB_ENV
+
+          ls -la ${{ inputs.context }}
+          echo "MODEL_CONTEXT=${MODEL_CONTEXT}"
+
+          # Transform "--build-arg KEY=VAL --build-arg X=Y" -> multiline list for buildx
+          BUILD_ARGS_LIST=$(echo "${BUILD_ARGS:-}" | tr ' ' '\n' | grep '^--build-arg' | sed -E 's/^--build-arg[[:space:]]+//')
+          echo "BUILD_ARGS_LIST<<EOF" >> $GITHUB_ENV
+          echo "$BUILD_ARGS_LIST" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+          # Conditionally add MODEL_CONTEXT only when provided (avoid overriding Dockerfile default)
+          if [ -n "${MODEL_CONTEXT}" ]; then
+            echo "EXTRA_BUILD_ARGS_LIST<<EOF" >> $GITHUB_ENV
+            echo "MODEL_CONTEXT=${MODEL_CONTEXT}" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log Before Run
+        run: |
+          ls -la ${{ inputs.context }}
+          ls -la ${{ inputs.dockerfile_path }}
+          ls -la ${{ inputs.model_context }}
+          echo "EXTRA_BUILD_ARGS_LIST=${{ env.EXTRA_BUILD_ARGS_LIST }}"
+          echo "BUILD_ARGS_LIST=${{ env.BUILD_ARGS_LIST }}"
+          echo "MODEL_CONTEXT=${{ env.MODEL_CONTEXT }}"
+          echo "ECR_URI=${{ env.ECR_URI }}"
+          echo "image_tag=${{ env.image_tag }}"
+
+      - name: Build image (no push, load for Trivy)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile_path }}
+          push: false
+          load: true
+          tags: ${{ env.ECR_URI }}:${{ env.image_tag }}
+          build-args: |
+            ${{ env.EXTRA_BUILD_ARGS_LIST }}
+            ${{ env.BUILD_ARGS_LIST }}
+
+      - name: Run Trivy vulnerability scanner in Trivy self host
+        if: ${{ inputs.trivy_self_host }}
+        run: |
+          export TRIVY_SERVER="https://nonprod-common-trivy.qualgo.dev"
+          echo "Trivy Server: $TRIVY_SERVER"
+          trivy image ${{ env.ECR_URI }}:${{ env.image_tag }}
+
+      - name: Run Trivy vulnerability scanner
+        if: ${{ inputs.trivy_self_host == false }}
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: "${{ env.ECR_URI }}:${{ env.image_tag }}"
+          format: "table"
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: "os,library"
+          severity: "CRITICAL,HIGH"
+          skip-dirs: ${{ inputs.skip_dir }}
+          timeout: ${{ inputs.trivy_timeout }}
+        env:
+          TRIVY_DISABLE_VEX_NOTICE: true
+
+      - name: Login to Amazon ECR and Push Image
+        if: ${{ inputs.docker_push }}
+        run: |
+          aws ecr get-login-password --region ${{ inputs.aws_region }} \
+            | docker login --username AWS --password-stdin ${{ inputs.ecr_registry }}
+
+          docker push ${{ env.ECR_URI }}:${{ env.image_tag }}

@@ -1,0 +1,256 @@
+{{- if .Values.enabledDeployment }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ template "chart.fullname" $ }}
+  labels:
+    app: {{ .Values.name }}
+    tier: {{ .Values.tier }}
+  annotations: 
+    {{- if .Values.reloader.enabled }}
+    {{- if eq .Values.reloader.mode "specific" }}
+    reloader.stakater.com/auto: "false"
+    secret.reloader.stakater.com/auto: {{ .Values.reloader.secret.enabled | default "false" }}
+    configmap.reloader.stakater.com/auto: {{ .Values.reloader.configmap.enabled | default "false" }}
+    {{- end }}
+    {{- if eq .Values.reloader.mode "auto" }}
+    reloader.stakater.com/auto: "auto"
+    {{- end }}
+    {{- end }}
+spec:
+  replicas: {{ .Values.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app: {{ .Values.name }}
+      tier: {{ .Values.tier }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.name }}
+        tier: {{ .Values.tier }}
+        {{- if .Values.podLabels }}
+        {{- toYaml .Values.podLabels | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- if .Values.serviceAccount.enabled }}
+      serviceAccountName: {{ template "saName" $ }}
+      {{- end }}
+      restartPolicy: {{ .Values.restartPolicy | default "Always" }}
+      {{- if .Values.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 30 }}
+      {{- end }}
+      {{- if .Values.hostAliases }}
+      hostAliases:
+      {{- range .Values.hostAliases }}
+        - ip: {{ .ip }}
+          hostnames:
+          {{- range .hostnames }}
+            - {{ . }}
+          {{- end}}
+      {{- end }}
+      {{- end }}
+      {{- if .Values.image.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml .Values.image.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      containers:
+
+        #                #
+        # CONTAINER MAIN #
+        #                #
+        - name: {{ template "chart.fullname" $ }}
+          image: {{ template "image" . }}
+          {{- if .Values.securityContext }}
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- end }}
+          {{- if .Values.envs }}
+          env:
+          {{- range $k, $v := .Values.envs }}
+            - name: {{ $k }}
+              value: {{ $v | quote}}
+          {{- end }}
+          {{- end }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
+          {{- if .Values.lifecycle }}
+          lifecycle: {{- toYaml .Values.lifecycle | nindent 12 }}
+          {{- end }}
+          {{- if .Values.image.command }}
+          command: 
+          - /bin/sh
+          - -c 
+          - {{ .Values.image.command }};
+          {{- end}}
+          ports:
+            - name: main
+              containerPort: {{ .Values.image.containerPort }}
+          {{- if .Values.livenessProbe }}
+          livenessProbe: {{- toYaml .Values.livenessProbe | nindent 12 }}
+          {{- end }}
+          {{- if .Values.readinessProbe }}
+          readinessProbe: {{- toYaml .Values.readinessProbe | nindent 12 }}
+          {{- end }}
+          {{- if .Values.startupProbe }}
+          startupProbe: {{- toYaml .Values.startupProbe | nindent 12 }}
+          {{- end }}
+          {{- if .Values.resources }}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          {{- end }}
+
+          #              #
+          # VOLUME MOUNT #
+          #              #
+          volumeMounts:
+            # Basic mount RWO #
+            {{- if .Values.mounts }}
+            {{- range .Values.mounts }}
+            - mountPath: {{ .mountPath }}
+              name: "{{ template "chart.fullname" $ }}-volume"
+              subPath: {{ .filename }}
+              readOnly: true
+            {{- end }}
+            {{- end }}
+
+            # Handling emptyDir volumeMounts #
+            {{- if .Values.emptyDirVolumes }}
+            {{- range .Values.emptyDirVolumes }}
+            - mountPath: {{ .mountPath }}
+              name: {{ .name }}
+              readOnly: {{ .readOnly | default false }}
+            {{- end }}
+            {{- end }}
+
+            # External ENV by file #
+            {{- if and (.Values.externalEnvFromCM.enabled) (eq .Values.externalEnvFromCM.type "file")  }}
+            - mountPath: "{{ .Values.externalEnvFromCM.mountPath }}"
+              name: {{ template "configmapName" $ }}
+              subPath: {{ template "envFile" $ }}
+              readOnly: {{ template "externalEnvReadOnly" $ }}
+            {{- end }}
+
+            {{- if and (.Values.externalEnvFromAWS.enabled)  }}
+            - name: {{ template "secretName" $ }}
+              mountPath: {{ "/mnt/secret" }}
+            {{- end }}
+
+            {{- if and (.Values.externalEnvFromAWS.enabled) (.Values.externalEnvFromAWS.mountAsFiles) }}
+            - name: {{ template "secretNameFiles" $ }}
+              mountPath: {{ .Values.externalEnvFromAWS.mountPath | default "/mnt/secrets" }}
+              readOnly: true
+            {{- end }}
+
+            # Extra configmap with type is file#
+            {{- range .Values.externalData }}
+            {{- if eq .type "file" }}
+            - mountPath: {{ .mountPath }}
+              name: {{ .name }}
+              subPath: {{ .fileName }}
+              readOnly: {{ .readOnly }}
+            {{- end }}
+            {{- end }}
+
+            # Persistent volume RWM #
+            {{- if .Values.persistentVolumes }}
+            {{- range .Values.persistentVolumes }}
+            - mountPath: "{{ .mountPath }}"
+              {{- if .subPath }}
+              subPath: "{{ .subPath }}"
+              {{- end }}
+              name: "{{ .name }}"
+            {{- end }}
+            {{- end }}
+            
+          # Env with external type variable #
+          {{- if or (.Values.externalEnvFromAWS.enabled) (.Values.externalEnvFromVault.enabled) (and (.Values.externalEnvFromCM.enabled) (eq .Values.externalEnvFromCM.type "variable")) }}
+          envFrom:
+            {{- if and (.Values.externalEnvFromCM.enabled) (eq .Values.externalEnvFromCM.type "variable") }}
+            - configMapRef:
+                name: {{ template "configmapName" $ }}
+            {{- end }}
+            {{- if or (.Values.externalEnvFromAWS.enabled) (.Values.externalEnvFromVault.enabled) }}
+            - secretRef:
+                name: {{ template "secretName" $ }}
+            {{- end }}
+          {{- end }}
+
+      #        #
+      # VOLUME #
+      #        #
+      volumes:
+        # Basic mount RWO #
+        {{- if .Values.mounts }}
+        - name: "{{ template "chart.fullname" $ }}-volume"
+          configMap:
+            name: "{{ template "chart.fullname" $ }}"
+            items:
+              {{- range .Values.mounts }}
+              - key: {{ .name }}
+                path: {{ .filename }}
+              {{- end }}
+        {{- end }}
+
+        # Handling emptyDir mounts #
+        {{- if .Values.emptyDirVolumes }}
+        {{- range .Values.emptyDirVolumes }}
+        - name: {{ .name }}
+          emptyDir: {}
+        {{- end }}
+        {{- end}}
+
+        # configmap #
+        {{- if and (eq .Values.externalEnvFromCM.type "file") (.Values.externalEnvFromCM.enabled) }}
+        - name: {{ template "configmapName" $ }}
+          configMap:
+            name: {{ template "configmapName" $ }}
+        {{- end }}
+
+        # Extra configmaps #
+        {{- range .Values.externalData }}
+        {{- if eq .type "file" }}
+        - name: {{ .name }}
+          configMap:
+            name: {{ .name }}
+        {{- end }}
+        {{- end }}
+      
+        # secret #
+        {{- if and (.Values.externalEnvFromAWS.enabled)  }}
+        - name: {{ template "secretName" $ }}
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ template "secretName" $ }}
+        {{- end }}
+
+        # secret files #
+        {{- if and (.Values.externalEnvFromAWS.enabled) (.Values.externalEnvFromAWS.mountAsFiles) }}
+        - name: {{ template "secretNameFiles" $ }}
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ template "secretNameFiles" $ }}
+        {{- end }}
+
+        # Persistenct volume RWM #
+        {{- if .Values.persistentVolumes }}
+        {{- range .Values.persistentVolumes }}
+        - name: "{{ .name }}"
+          persistentVolumeClaim:
+            {{- if .existingClaim }}
+            claimName: "{{ .existingClaim }}"
+            {{- else }}
+            claimName: "{{ printf "%s-%s" (include "chart.fullname" $) .name }}"
+            {{- end }}
+        {{- end }}
+        {{- end }}
+
+      {{- if .Values.affinity }}
+      affinity: {{- toYaml .Values.affinity | nindent 8 }}
+      {{- end }}
+      {{- if .Values.nodeSelector }}
+      nodeSelector: {{- toYaml .Values.nodeSelector | nindent 8 }}
+      {{- end }}
+      {{- if .Values.tolerations }}
+      tolerations: {{- toYaml .Values.tolerations | nindent 6 }}
+      {{- end }}
+{{- end }}  

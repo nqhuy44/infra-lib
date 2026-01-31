@@ -1,0 +1,134 @@
+name: Android CI
+
+on:
+  workflow_call:
+    inputs:
+      aws_region:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      runner_label:
+        required: true
+        type: string
+      secret_id:
+        required: true
+        type: string
+      s3_bucket:
+        required: true
+        type: string
+      upload:
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: false
+      AWS_SECRET_ACCESS_KEY:
+        required: false
+
+jobs:
+  android_ci:
+    runs-on: ${{ inputs.runner_label }}
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Generate local files
+        run: python3 ./misc/scripts/create_local_properties.py
+
+      - name: Set AWS Account ID
+        run: |
+          if [ "${{ inputs.environment }}" = "prod" ]; then
+            echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+          else
+            echo "ACCOUNT_ID=123456789" >> $GITHUB_ENV
+          fi
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v5.1.1
+        with:
+          role-to-assume: arn:aws:iam::${{ env.ACCOUNT_ID }}:role/global-github-actions-role
+          aws-region: ${{ inputs.aws_region }}
+
+      # Get secrets from AWS Secrets Manager
+      - name: Get Secrets from AWS Secrets Manager
+        run: |
+          # Fetch the secret value
+          SECRET_VALUE=$(aws secretsmanager get-secret-value \
+              --secret-id "${{ inputs.secret_id }}" \
+              --query SecretString \
+              --output text \
+              --region ${{ inputs.aws_region }})
+
+          # Parse each key-value in the secret JSON and export as GitHub env vars
+          for key in $(echo "$SECRET_VALUE" | jq -r 'keys[]'); do
+            value=$(echo "$SECRET_VALUE" | jq -r --arg k "$key" '.[$k]')
+            
+            # Mask secret so it never appears in logs
+            echo "::add-mask::$value"
+            
+            # Export as environment variable
+            echo "$key=$value" >> $GITHUB_ENV
+          done
+
+      # Download the whole Configs folder
+      - name: Pull Properties
+        run: aws s3 cp s3://${{ inputs.s3_bucket }} ./ --recursive
+
+      # Error: The current runner (macos-15-arm64) was detected as self-hosted because the self-hosted input was set.
+      # In such a case, you should install Ruby in the $RUNNER_TOOL_CACHE yourself, for example using https://github.com/rbenv/ruby-build
+      # You can take inspiration from this workflow for more details: https://github.com/ruby/ruby-builder/blob/master/.github/workflows/build.yml
+      # $ ruby-build 3.3.9 /private/etc/actions_runner/_work/_tool/Ruby/3.3.9/arm64
+      # Once that completes successfully, mark it as complete with:
+      # $ touch /private/etc/actions_runner/_work/_tool/Ruby/3.3.9/arm64.complete
+      # It is your responsibility to ensure installing Ruby like that is not done in parallel.
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: 3.3.9
+          self-hosted: true
+
+      - name: Install bundler
+        run: |
+          bundle install
+
+      - name: Set env variables
+        run: |
+          if [ "${{ inputs.environment }}" = "prod" ]; then
+            ENV_NAME="production"
+          else
+            ENV_NAME="${{ inputs.environment }}"
+          fi
+          echo "ENV_NAME=${ENV_NAME}" >> $GITHUB_ENV
+
+      - name: Get GitHub secrets from AWS Secrets Manager
+        run: |
+          secret_json=$(aws secretsmanager get-secret-value --secret-id github-action --query SecretString --output text --region us-east-1)
+          echo "GH_TOKEN=$(echo $secret_json | jq -r .GH_TOKEN)" >> $GITHUB_ENV
+          echo "GH_ID=$(echo $secret_json | jq -r .GH_ID)" >> $GITHUB_ENV
+
+      - name: Update token
+        run: |
+          git config --global url."https://x-token-auth:${{ env.GH_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Android build
+        run: bundle exec fastlane android build env:${ENV_NAME}
+
+      # - name: App Sealing (Production only)
+      #   if: ${{ inputs.environment == 'prod' }}
+      #   run: ./misc/scripts/run_appsealing.sh
+
+      - name: Android Upload
+        if: ${{ inputs.upload }}
+        run: |
+          bundle exec fastlane android upload env:${ENV_NAME}
+
+      - name: Unset GitHub Token
+        if: always()
+        run: |
+          git config --global --unset url.https://x-token-auth:${{ env.GH_TOKEN }}@github.com/.insteadof

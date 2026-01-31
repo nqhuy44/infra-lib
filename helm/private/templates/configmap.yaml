@@ -1,0 +1,40 @@
+{{- if .Values.externalEnvFromCM.enabled}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "configmapName" $ }}
+  annotations:
+    "helm.sh/hook": pre-install, pre-upgrade
+    "helm.sh/hook-weight": "-1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-failed
+data:
+  {{- if eq .Values.externalEnvFromCM.type "file" }}
+  {{ template "envFile" $ }}: |
+    {{- range $key, $value := .Values.externalEnvFromCM.data }}
+    {{ $key }}={{ $value }}
+    {{- end }}
+  {{- else if eq .Values.externalEnvFromCM.type "variable" }}
+    {{- range $key, $value := .Values.externalEnvFromCM.data }}
+    {{ $key }}: "{{ $value }}"
+    {{- end }}
+  {{- end }}
+{{- end }}
+
+
+{{- range .Values.externalData }}
+{{- if eq .type "file" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .name }}
+  annotations:
+    "helm.sh/hook": pre-install, pre-upgrade
+    "helm.sh/hook-weight": "-1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-failed
+data: 
+  {{ .fileName }}: |
+    {{ .data | nindent 4 }}
+{{- end }}
+{{- end }}
