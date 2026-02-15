@@ -35,9 +35,10 @@ resource "google_compute_instance" "default" {
   }
 
   scheduling {
-    preemptible        = var.spot_instance
-    automatic_restart  = !var.spot_instance
-    provisioning_model = var.spot_instance ? "SPOT" : "STANDARD"
+    preemptible                 = var.spot_instance
+    automatic_restart           = !var.spot_instance
+    provisioning_model          = var.spot_instance ? "SPOT" : "STANDARD"
+    instance_termination_action = var.spot_instance ? var.instance_termination_action : null
   }
 
   network_interface {

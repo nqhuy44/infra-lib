@@ -133,8 +133,15 @@ variable "instance_status" {
   default     = "RUNNING"
 }
 
+
 variable "deletion_protection" {
   description = "Enable deletion protection on the instance."
   type        = bool
   default     = false
+}
+
+variable "instance_termination_action" {
+  description = "Specifies the termination action for the instance. If provisioning_model is SPOT, this can be STOP or DELETE."
+  type        = string
+  default     = "STOP"
 }
