@@ -140,6 +140,12 @@ variable "deletion_protection" {
   default     = false
 }
 
+variable "allow_stopping_for_update" {
+  description = "If true, allows Terraform to stop the instance to update its properties."
+  type        = bool
+  default     = false
+}
+
 variable "instance_termination_action" {
   description = "Specifies the termination action for the instance. If provisioning_model is SPOT, this can be STOP or DELETE."
   type        = string

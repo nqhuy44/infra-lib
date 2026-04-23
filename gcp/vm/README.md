@@ -36,6 +36,7 @@ module "vm" {
 | <a name="input_boot_disk_auto_delete"></a> [boot\_disk\_auto\_delete](#input\_boot\_disk\_auto\_delete) | Whether the boot disk should be auto-deleted when the instance is deleted. | `bool` | `true` | no |
 | <a name="input_instance_status"></a> [instance\_status](#input\_instance\_status) | The desired status of the instance (RUNNING or TERMINATED). | `string` | `"RUNNING"` | no |
 | <a name="input_deletion_protection"></a> [deletion\_protection](#input\_deletion\_protection) | Enable deletion protection on the instance. | `bool` | `false` | no |
+| <a name="input_allow_stopping_for_update"></a> [allow\_stopping\_for\_update](#input\_allow\_stopping\_for\_update) | If true, allows Terraform to stop the instance to update its properties. | `bool` | `false` | no |
 | <a name="input_additional_disks"></a> [additional\_disks](#input\_additional\_disks) | List of additional data disks to create and attach to the instance. | <pre>list(object({<br>    name        = string<br>    size        = number<br>    type        = optional(string, "pd-standard")<br>    device_name = optional(string)<br>  }))</pre> | `[]` | no |
 | <a name="input_assign_public_ip"></a> [assign\_public\_ip](#input\_assign\_public\_ip) | If true, assigns a public IPv4 address to the instance. | `bool` | `false` | no |
 | <a name="input_static_public_ip"></a> [static\_public\_ip](#input\_static\_public\_ip) | The static external IP address to assign to the instance. Requires assign_public_ip to be true. | `string` | `null` | no |
