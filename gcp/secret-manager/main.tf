@@ -3,8 +3,6 @@ resource "google_secret_manager_secret" "secrets" {
   project   = var.project_id
   secret_id = each.key
 
-  labels = var.labels
-
   replication {
     auto {}
   }

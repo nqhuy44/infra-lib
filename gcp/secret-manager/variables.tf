@@ -13,9 +13,3 @@ variable "accessors" {
   type        = list(string)
   default     = []
 }
-
-variable "labels" {
-  description = "A map of labels (tags) to apply to all secrets."
-  type        = map(string)
-  default     = {}
-}
