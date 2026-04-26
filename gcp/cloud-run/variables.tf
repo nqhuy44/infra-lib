@@ -18,6 +18,18 @@ variable "image" {
   type        = string
 }
 
+variable "command" {
+  description = "Entrypoint array. Leaves empty to use the default entrypoint in the container image."
+  type        = list(string)
+  default     = []
+}
+
+variable "args" {
+  description = "Arguments to the entrypoint command."
+  type        = list(string)
+  default     = []
+}
+
 variable "container_port" {
   description = "The port on which the container listens."
   type        = number
@@ -26,6 +38,12 @@ variable "container_port" {
 
 variable "env_vars" {
   description = "A map of environment variables to set in the container."
+  type        = map(string)
+  default     = {}
+}
+
+variable "secret_vars" {
+  description = "A map of environment variables to set from Google Secret Manager. The key is the environment variable name, and the value is the secret ID. The 'latest' version of the secret will be used."
   type        = map(string)
   default     = {}
 }
@@ -42,6 +60,18 @@ variable "memory_limit" {
   default     = "512Mi"
 }
 
+variable "cpu_idle" {
+  description = "Determines whether CPU is allocated only during requests (true) or always allocated (false)."
+  type        = bool
+  default     = true
+}
+
+variable "startup_cpu_boost" {
+  description = "Enable CPU boost on startup."
+  type        = bool
+  default     = false
+}
+
 variable "min_instance_count" {
   description = "The minimum number of instances to maintain."
   type        = number
@@ -52,6 +82,12 @@ variable "max_instance_count" {
   description = "The maximum number of instances to maintain."
   type        = number
   default     = 10
+}
+
+variable "max_instance_request_concurrency" {
+  description = "Sets the maximum number of requests that each serving instance can receive."
+  type        = number
+  default     = null
 }
 
 variable "vpc_connector" {
