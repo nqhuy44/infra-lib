@@ -8,6 +8,7 @@ resource "google_cloud_run_v2_service" "default" {
   template {
     labels                           = var.labels
     max_instance_request_concurrency = var.max_instance_request_concurrency
+    timeout                          = var.request_timeout
 
     scaling {
       max_instance_count = var.max_instance_count
@@ -49,6 +50,56 @@ resource "google_cloud_run_v2_service" "default" {
             secret_key_ref {
               secret  = env.value
               version = "latest"
+            }
+          }
+        }
+      }
+
+      dynamic "liveness_probe" {
+        for_each = var.liveness_probe != null ? [var.liveness_probe] : []
+        content {
+          initial_delay_seconds = liveness_probe.value.initial_delay_seconds
+          timeout_seconds       = liveness_probe.value.timeout_seconds
+          period_seconds        = liveness_probe.value.period_seconds
+          failure_threshold     = liveness_probe.value.failure_threshold
+
+          dynamic "http_get" {
+            for_each = liveness_probe.value.http_get != null ? [liveness_probe.value.http_get] : []
+            content {
+              path = http_get.value.path
+              port = http_get.value.port
+            }
+          }
+
+          dynamic "tcp_socket" {
+            for_each = liveness_probe.value.tcp_socket != null ? [liveness_probe.value.tcp_socket] : []
+            content {
+              port = tcp_socket.value.port
+            }
+          }
+        }
+      }
+
+      dynamic "startup_probe" {
+        for_each = var.startup_probe != null ? [var.startup_probe] : []
+        content {
+          initial_delay_seconds = startup_probe.value.initial_delay_seconds
+          timeout_seconds       = startup_probe.value.timeout_seconds
+          period_seconds        = startup_probe.value.period_seconds
+          failure_threshold     = startup_probe.value.failure_threshold
+
+          dynamic "http_get" {
+            for_each = startup_probe.value.http_get != null ? [startup_probe.value.http_get] : []
+            content {
+              path = http_get.value.path
+              port = http_get.value.port
+            }
+          }
+
+          dynamic "tcp_socket" {
+            for_each = startup_probe.value.tcp_socket != null ? [startup_probe.value.tcp_socket] : []
+            content {
+              port = tcp_socket.value.port
             }
           }
         }

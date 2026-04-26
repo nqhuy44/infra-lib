@@ -90,6 +90,48 @@ variable "max_instance_request_concurrency" {
   default     = null
 }
 
+variable "request_timeout" {
+  description = "Max duration the instance is allowed for responding to a request (e.g. '300s')."
+  type        = string
+  default     = null
+}
+
+variable "liveness_probe" {
+  description = "Liveness probe configuration. Supports http_get or tcp_socket."
+  type = object({
+    http_get = optional(object({
+      path = string
+      port = optional(number)
+    }))
+    tcp_socket = optional(object({
+      port = optional(number)
+    }))
+    initial_delay_seconds = optional(number)
+    timeout_seconds       = optional(number)
+    period_seconds        = optional(number)
+    failure_threshold     = optional(number)
+  })
+  default = null
+}
+
+variable "startup_probe" {
+  description = "Startup probe configuration. Supports http_get or tcp_socket."
+  type = object({
+    http_get = optional(object({
+      path = string
+      port = optional(number)
+    }))
+    tcp_socket = optional(object({
+      port = optional(number)
+    }))
+    initial_delay_seconds = optional(number)
+    timeout_seconds       = optional(number)
+    period_seconds        = optional(number)
+    failure_threshold     = optional(number)
+  })
+  default = null
+}
+
 variable "vpc_connector" {
   description = "The VPC connector to use for the Cloud Run service."
   type        = string
