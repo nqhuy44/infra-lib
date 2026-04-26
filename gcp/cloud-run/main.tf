@@ -5,10 +5,16 @@ resource "google_cloud_run_v2_service" "default" {
   ingress  = var.ingress_settings
   labels   = var.labels
 
+  traffic {
+    type    = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
+    percent = var.traffic_percent
+  }
+
   template {
     labels                           = var.labels
     max_instance_request_concurrency = var.max_instance_request_concurrency
     timeout                          = var.request_timeout
+    execution_environment            = var.execution_environment
 
     scaling {
       max_instance_count = var.max_instance_count

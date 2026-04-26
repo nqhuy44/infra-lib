@@ -60,6 +60,8 @@ module "cloud_run" {
 | <a name="input_allow_unauthenticated_access"></a> [allow_unauthenticated_access](#input_allow_unauthenticated_access)             | Whether to allow unauthenticated access to the Cloud Run service.                  | `bool`         | `false`                 |    no    |
 | <a name="input_service_account_email"></a> [service_account_email](#input_service_account_email)                                  | The email address of the service account to use for the Cloud Run service.         | `string`       | `null`                  |    no    |
 | <a name="input_labels"></a> [labels](#input_labels)                                                                               | A map of labels to apply to the Cloud Run service.                                 | `map(string)`  | `{}`                    |    no    |
+| <a name="input_execution_environment"></a> [execution_environment](#input_execution_environment)                                  | The execution environment for the Cloud Run service (e.g., EXECUTION_ENVIRONMENT_GEN2).| `string`   | `null`                  |    no    |
+| <a name="input_traffic_percent"></a> [traffic_percent](#input_traffic_percent)                                                    | Percent of traffic to allocate to the latest revision.                             | `number`       | `100`                   |    no    |
 
 ## Outputs
 

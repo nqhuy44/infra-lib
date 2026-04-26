@@ -167,3 +167,15 @@ variable "labels" {
   type        = map(string)
   default     = {}
 }
+
+variable "execution_environment" {
+  description = "The execution environment for the Cloud Run service. Possible values are EXECUTION_ENVIRONMENT_GEN1, EXECUTION_ENVIRONMENT_GEN2."
+  type        = string
+  default     = null
+}
+
+variable "traffic_percent" {
+  description = "Percent of traffic to allocate to the latest revision."
+  type        = number
+  default     = 100
+}
