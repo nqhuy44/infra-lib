@@ -179,3 +179,45 @@ variable "traffic_percent" {
   type        = number
   default     = 100
 }
+
+variable "volumes" {
+  description = "A list of volumes to make available to the containers."
+  type = list(object({
+    name = string
+    empty_dir = optional(object({
+      medium     = optional(string)
+      size_limit = optional(string)
+    }))
+    secret = optional(object({
+      secret       = string
+      default_mode = optional(number)
+      items = optional(list(object({
+        path    = string
+        version = optional(string)
+        mode    = optional(number)
+      })))
+    }))
+    cloud_sql_instance = optional(object({
+      instances = optional(list(string))
+    }))
+    gcs = optional(object({
+      bucket    = string
+      read_only = optional(bool)
+    }))
+    nfs = optional(object({
+      server    = string
+      path      = string
+      read_only = optional(bool)
+    }))
+  }))
+  default = []
+}
+
+variable "volume_mounts" {
+  description = "A list of volume mounts to mount in the container."
+  type = list(object({
+    name       = string
+    mount_path = string
+  }))
+  default = []
+}

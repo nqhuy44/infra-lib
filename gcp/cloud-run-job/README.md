@@ -51,6 +51,8 @@ module "cloud_run_job" {
 | <a name="input_egress_settings"></a> [egress\_settings](#input\_egress\_settings) | The egress settings for the VPC connector. | `string` | `"ALL_TRAFFIC"` | no |
 | <a name="input_service_account_email"></a> [service\_account\_email](#input\_service\_account\_email) | The email address of the service account to use for the Cloud Run Job. | `string` | `null` | no |
 | <a name="input_labels"></a> [labels](#input\_labels) | A map of labels to apply to the Cloud Run Job. | `map(string)` | `{}` | no |
+| <a name="input_volumes"></a> [volumes](#input\_volumes) | A list of volumes (secret, empty_dir, gcs, etc) to make available to containers. | `list(object)` | `[]` | no |
+| <a name="input_volume_mounts"></a> [volume_mounts](#input\_volume_mounts) | A list of volume mounts (name, mount_path) to mount in the container. | `list(object)` | `[]` | no |
 
 ## Outputs
 

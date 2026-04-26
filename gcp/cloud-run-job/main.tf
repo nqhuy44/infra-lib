@@ -22,10 +22,74 @@ resource "google_cloud_run_v2_job" "default" {
         }
       }
 
+      dynamic "volumes" {
+        for_each = var.volumes
+        content {
+          name = volumes.value.name
+
+          dynamic "empty_dir" {
+            for_each = volumes.value.empty_dir != null ? [volumes.value.empty_dir] : []
+            content {
+              medium     = empty_dir.value.medium
+              size_limit = empty_dir.value.size_limit
+            }
+          }
+
+          dynamic "secret" {
+            for_each = volumes.value.secret != null ? [volumes.value.secret] : []
+            content {
+              secret       = secret.value.secret
+              default_mode = secret.value.default_mode
+              
+              dynamic "items" {
+                for_each = secret.value.items != null ? secret.value.items : []
+                content {
+                  path    = items.value.path
+                  version = items.value.version
+                  mode    = items.value.mode
+                }
+              }
+            }
+          }
+
+          dynamic "cloud_sql_instance" {
+            for_each = volumes.value.cloud_sql_instance != null ? [volumes.value.cloud_sql_instance] : []
+            content {
+              instances = cloud_sql_instance.value.instances
+            }
+          }
+
+          dynamic "gcs" {
+            for_each = volumes.value.gcs != null ? [volumes.value.gcs] : []
+            content {
+              bucket    = gcs.value.bucket
+              read_only = gcs.value.read_only
+            }
+          }
+
+          dynamic "nfs" {
+            for_each = volumes.value.nfs != null ? [volumes.value.nfs] : []
+            content {
+              server    = nfs.value.server
+              path      = nfs.value.path
+              read_only = nfs.value.read_only
+            }
+          }
+        }
+      }
+
       containers {
         image   = var.image
         command = length(var.command) > 0 ? var.command : null
         args    = length(var.args) > 0 ? var.args : null
+
+        dynamic "volume_mounts" {
+          for_each = var.volume_mounts
+          content {
+            name       = volume_mounts.value.name
+            mount_path = volume_mounts.value.mount_path
+          }
+        }
 
         dynamic "env" {
           for_each = var.env_vars
