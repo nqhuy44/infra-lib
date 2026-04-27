@@ -69,7 +69,7 @@ variable "parallelism" {
 variable "max_retries" {
   description = "Number of retries per task, between 0 and 10."
   type        = number
-  default     = 3
+  default     = 0
 }
 
 variable "timeout" {
