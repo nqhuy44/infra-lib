@@ -25,6 +25,7 @@ module "cloud_run_job" {
   
   task_count   = 10
   parallelism  = 3
+  max_retries  = 3
   timeout      = "600s"
 }
 ```
@@ -45,6 +46,7 @@ module "cloud_run_job" {
 | <a name="input_memory_limit"></a> [memory\_limit](#input\_memory\_limit) | The memory limit for the container (e.g., '512Mi'). | `string` | `"512Mi"` | no |
 | <a name="input_task_count"></a> [task\_count](#input\_task\_count) | Number of tasks to run per execution. | `number` | `1` | no |
 | <a name="input_parallelism"></a> [parallelism](#input\_parallelism) | Max number of tasks to run in parallel. | `number` | `1` | no |
+| <a name="input_max_retries"></a> [max\_retries](#input\_max\_retries) | Number of retries per task, between 0 and 10. | `number` | `3` | no |
 | <a name="input_timeout"></a> [timeout](#input\_timeout) | Max duration a task is allowed to run (e.g. '600s'). | `string` | `"600s"` | no |
 | <a name="input_execution_environment"></a> [execution\_environment](#input\_execution\_environment) | The execution environment for the Cloud Run Job (e.g., EXECUTION_ENVIRONMENT_GEN2). | `string` | `"EXECUTION_ENVIRONMENT_GEN2"` | no |
 | <a name="input_vpc_connector"></a> [vpc\_connector](#input\_vpc\_connector) | The VPC connector to use for the Cloud Run Job. | `string` | `null` | no |

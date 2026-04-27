@@ -11,6 +11,7 @@ resource "google_cloud_run_v2_job" "default" {
 
     template {
       timeout               = var.timeout
+      max_retries           = var.max_retries
       execution_environment = var.execution_environment
       service_account       = var.service_account_email
 
